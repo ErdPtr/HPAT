@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Házi projekt atari</title>
+    <style>
+        body {
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #222;
+            margin-bottom: 10px;
+            text-decoration: underline;
+        }
+        #gameContainer {
+            position: relative;
+        }
+        canvas {
+            background: #000;
+            display: block;
+            border: 4px solid #333;
+            border-radius: 6px;
+        }
+        #hud {
+            display: flex;
+            justify-content: space-between;
+            width: 480px;
+            font-size: 18px;
+            color: #222;
+            margin-bottom: 8px;
+        }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 20px;
+            border-radius: 4px;
+            gap: 12px;
+        }
+        #overlayText {
+            margin-bottom: 8px;
+            font-weight: bold;
+            font-size: 22px;
+        }
+        #overlay button {
+            padding: 10px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background: #4caf50;
+            color: white;
+            min-width: 140px;
+        }
+        #overlay button:hover {
+            background: #45a049;
+        }
+        #levelButtons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #overlay.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Atari Breakout</h1>
+    <div id="hud">
+        <span>Score: <span id="scoreDisplay">0</span></span>
+        <span>Level: <span id="levelDisplay">1</span></span>
+        <span>Lives: <span id="livesDisplay">3</span></span>
+    </div>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="480" height="700"></canvas>
+        <div id="overlay">
+            <div id="overlayText">Válassz pályát!</div>
+            <div id="levelButtons">
+                <button id="btnLevel1">Pálya 1</button>
+                <button id="btnLevel2">Pálya 2</button>
+                <button id="btnLevel3">Pálya 3</button>
+            </div>
+            <button id="overlayButton" style="display:none;">Restart</button>
+        </div>
+    </div>
+    <script>
+        (function () {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const scoreDisplay = document.getElementById('scoreDisplay');
+            const levelDisplay = document.getElementById('levelDisplay');
+            const livesDisplay = document.getElementById('livesDisplay');
+            const overlay = document.getElementById('overlay');
+            const overlayText = document.getElementById('overlayText');
+            const overlayButton = document.getElementById('overlayButton');
+            const levelButtons = document.getElementById('levelButtons');
+            const btnLevel1 = document.getElementById('btnLevel1');
+            const btnLevel2 = document.getElementById('btnLevel2');
+            const btnLevel3 = document.getElementById('btnLevel3');
+
+            const WIDTH = canvas.width;
+            const HEIGHT = canvas.height;
+            const basePaddleWidth = 75;
+            const paddle = {
+                width: basePaddleWidth,
+                height: 10,
+                x: (WIDTH - basePaddleWidth) / 2,
+                speed: 10
+            };
+            let balls = [];
+            const ballRadius = 6;
+
+            function makeBall(x, y, dx, dy) {
+                return { x, y, dx, dy, radius: ballRadius };
+            }
+
+            // --- Tégla-terület: ez a rész marad mindig teljesen lefedve ---
+            // (a "kép" ezen a területen bújik meg a téglák mögött)
+            const brickAreaX = 20;
+            const brickAreaY = 40;
+            const brickAreaWidth = WIDTH - brickAreaX * 2;   // 440
+            const brickAreaHeight = brickAreaWidth;          // négyzet alakú terület a képhez
+            const brickGap = 6;                               // rés a téglák között
+
+            // Ezek pályánként újraszámolódnak, hogy a terület mindig TELJESEN
+            // ki legyen töltve, csak egyre több és egyre kisebb téglával.
+            let brickRowCount, brickColumnCount, brickWidth, brickHeight, hitboxExpand;
+
+            // Háttérképek pályánként, amik a téglák mögött bújnak meg, és a
+            // téglák törésével fokozatosan válnak láthatóvá.
+            // Írd be ide a saját képeid URL-jét (pl. 'https://example.com/kep1.jpg').
+            // Megjegyzés: ez a betöltési mód csak akkor működik, ha a fájlt
+            // saját magad futtatod / hosztolod - egy Claude artifactként
+            // publikált oldal nem tud külső kép URL-eket betölteni.
+            function loadImage(src) {
+                const obj = { img: new Image(), loaded: false };
+                obj.img.onload = function () { obj.loaded = true; };
+                obj.img.onerror = function () {
+                    console.error('Nem sikerült betölteni a képet:', src);
+                };
+                obj.img.src = src;
+                return obj;
+            }
+
+            const levelImages = [
+                loadImage('PASTE_LEVEL_1_IMAGE_URL_HERE'),
+                loadImage('PASTE_LEVEL_2_IMAGE_URL_HERE'),
+                loadImage('PASTE_LEVEL_3_IMAGE_URL_HERE')
+            ];
+
+            // 3 pálya – mindegyik teljesen tele van téglával, csak a méret/darabszám nő
+            const levels = [
+                {
+                    // Pálya 1 – alap sűrűség
+                    rows: 4,
+                    cols: 7,
+                    colors: ['#e63946', '#f4a261', '#e9c46a', '#2a9d8f'],
+                    speedMultiplier: 1
+                },
+                {
+                    // Pálya 2 – több, kisebb tégla
+                    rows: 6,
+                    cols: 10,
+                    colors: ['#8e44ad', '#3498db', '#1abc9c', '#f1c40f', '#e67e22', '#16a085'],
+                    speedMultiplier: 1.2
+                },
+                {
+                    // Pálya 3 – még sűrűbb, még kisebb téglák
+                    rows: 8,
+                    cols: 13,
+                    colors: ['#e76f51', '#2a9d8f', '#264653', '#e9c46a', '#8e44ad', '#3498db', '#c0392b', '#16a085'],
+                    speedMultiplier: 1.4
+                }
+            ];
+
+            let bricks = [];
+            let currentLevel = 0;
+            let score = 0;
+            let lives = 3;
+            let rightPressed = false;
+            let leftPressed = false;
+            let gameRunning = false;
+            let animationId = null;
+            const baseMoveEvery = 3;
+            let moveEvery = baseMoveEvery;
+
+            function computeBrickGeometry(levelIndex) {
+                const level = levels[levelIndex];
+                brickRowCount = level.rows;
+                brickColumnCount = level.cols;
+                // A terület (brickAreaWidth x brickAreaHeight) mindig teljesen
+                // kitöltésre kerül: minél több a sor/oszlop, annál kisebb lesz
+                // egy-egy tégla, de az összterület fedettsége ugyanaz marad.
+                brickWidth = (brickAreaWidth - (brickColumnCount - 1) * brickGap) / brickColumnCount;
+                brickHeight = (brickAreaHeight - (brickRowCount - 1) * brickGap) / brickRowCount;
+                hitboxExpand = Math.max(0, brickGap / 2 - 1);
+            }
+
+            function buildBricks(levelIndex) {
+                const level = levels[levelIndex];
+                computeBrickGeometry(levelIndex);
+                bricks = [];
+                for (let c = 0; c < brickColumnCount; c++) {
+                    bricks[c] = [];
+                    for (let r = 0; r < brickRowCount; r++) {
+                        bricks[c][r] = {
+                            x: 0,
+                            y: 0,
+                            status: 1, // minden szinten minden tégla aktív -> teljes lefedettség
+                            color: level.colors[r % level.colors.length]
+                        };
+                    }
+                }
+            }
+
+            function resetBallAndPaddle() {
+                paddle.width = basePaddleWidth;
+                paddle.x = (WIDTH - paddle.width) / 2;
+                moveEvery = baseMoveEvery;
+                const level = levels[currentLevel];
+                const baseSpeed = 1.5 * level.speedMultiplier;
+                const dx = baseSpeed * (Math.random() < 0.5 ? 1 : -1);
+                balls = [makeBall(WIDTH / 2, HEIGHT - 30, dx, -baseSpeed)];
+            }
+
+            function startLevel(levelIndex) {
+                currentLevel = levelIndex;
+                buildBricks(currentLevel);
+                resetBallAndPaddle();
+                levelDisplay.textContent = currentLevel + 1;
+                score = 0;
+                lives = 3;
+                scoreDisplay.textContent = score;
+                livesDisplay.textContent = lives;
+            }
+
+            function drawBackgroundImage() {
+                const levelImage = levelImages[currentLevel];
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
+                ctx.clip();
+                if (levelImage && levelImage.loaded) {
+                    ctx.drawImage(levelImage.img, brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
+                } else {
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
+                }
+                ctx.restore();
+            }
+
+            function drawBalls() {
+                balls.forEach(ball => {
+                    ctx.beginPath();
+                    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fill();
+                    ctx.closePath();
+                });
+            }
+
+            function drawPaddle() {
+                ctx.beginPath();
+                ctx.rect(paddle.x, HEIGHT - paddle.height - 5, paddle.width, paddle.height);
+                ctx.fillStyle = '#00bcd4';
+                ctx.fill();
+                ctx.closePath();
+            }
+
+            function drawBricks() {
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status === 1) {
+                            const brickX = c * (brickWidth + brickGap) + brickAreaX;
+                            const brickY = r * (brickHeight + brickGap) + brickAreaY;
+                            b.x = brickX;
+                            b.y = brickY;
+                            ctx.beginPath();
+                            ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                            ctx.fillStyle = b.color;
+                            ctx.fill();
+                            ctx.closePath();
+                        }
+                    }
+                }
+            }
+
+            function bricksRemaining() {
+                let count = 0;
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        if (bricks[c][r].status === 1) count++;
+                    }
+                }
+                return count;
+            }
+
+            function handleLevelClear() {
+                // Egy pálya van kiválasztva – ha azt kitörted, nyertél
+                pauseAndShowOverlay(
+                    'You win!',
+                    'Restart',
+                    () => {
+                        showLevelSelect();
+                    }
+                );
+            }
+
+            function collisionDetection(ball) {
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status === 1) {
+                            const left = b.x - hitboxExpand;
+                            const right = b.x + brickWidth + hitboxExpand;
+                            const top = b.y - hitboxExpand;
+                            const bottom = b.y + brickHeight + hitboxExpand;
+
+                            if (
+                                ball.x + ball.radius > left &&
+                                ball.x - ball.radius < right &&
+                                ball.y + ball.radius > top &&
+                                ball.y - ball.radius < bottom
+                            ) {
+                                // Kiszámoljuk, melyik oldalról érkezett a labda, hogy
+                                // helyesen pattanjon: oldalról jövő ütésnél a
+                                // vízszintes, felül/alul jövő ütésnél a függőleges
+                                // irányt kell megfordítani.
+                                const centerX = (left + right) / 2;
+                                const centerY = (top + bottom) / 2;
+                                const halfWidth = (right - left) / 2;
+                                const halfHeight = (bottom - top) / 2;
+
+                                const overlapX = halfWidth + ball.radius - Math.abs(ball.x - centerX);
+                                const overlapY = halfHeight + ball.radius - Math.abs(ball.y - centerY);
+
+                                if (overlapX < overlapY) {
+                                    ball.dx = -ball.dx;
+                                } else {
+                                    ball.dy = -ball.dy;
+                                }
+
+                                b.status = 0;
+                                score += 10;
+                                scoreDisplay.textContent = score;
+                                if (bricksRemaining() === 0) {
+                                    handleLevelClear();
+                                }
+                                // Csak egy téglát törünk el ellenőrzésenként, hogy a labda
+                                // ne tudjon "egyszerre" két szomszédos téglát kiütni.
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            function showLevelSelect() {
+                gameRunning = false;
+                cancelAnimationFrame(animationId);
+                overlayText.textContent = 'Válassz pályát!';
+                levelButtons.style.display = 'flex';
+                overlayButton.style.display = 'none';
+                overlay.classList.remove('hidden');
+            }
+
+            function pauseAndShowOverlay(text, buttonLabel, onContinue) {
+                gameRunning = false;
+                cancelAnimationFrame(animationId);
+                overlayText.textContent = text;
+                levelButtons.style.display = 'none';
+                overlayButton.style.display = 'block';
+                overlayButton.textContent = buttonLabel;
+                overlay.classList.remove('hidden');
+                overlayButton.onclick = () => {
+                    overlay.classList.add('hidden');
+                    onContinue();
+                };
+            }
+
+            function startGame(levelIndex) {
+                overlay.classList.add('hidden');
+                startLevel(levelIndex);
+                gameRunning = true;
+                draw();
+            }
+
+            // Pályaválasztó gombok
+            btnLevel1.addEventListener('click', () => startGame(0));
+            btnLevel2.addEventListener('click', () => startGame(1));
+            btnLevel3.addEventListener('click', () => startGame(2));
+
+            function keyDownHandler(e) {
+                if (e.key === 'Right' || e.key === 'ArrowRight') rightPressed = true;
+                else if (e.key === 'Left' || e.key === 'ArrowLeft') leftPressed = true;
+            }
+            function keyUpHandler(e) {
+                if (e.key === 'Right' || e.key === 'ArrowRight') rightPressed = false;
+                else if (e.key === 'Left' || e.key === 'ArrowLeft') leftPressed = false;
+            }
+            function mouseMoveHandler(e) {
+                const rect = canvas.getBoundingClientRect();
+                const relativeX = e.clientX - rect.left;
+                if (relativeX > 0 && relativeX < WIDTH) {
+                    paddle.x = Math.min(Math.max(relativeX - paddle.width / 2, 0), WIDTH - paddle.width);
+                }
+            }
+
+            document.addEventListener('keydown', keyDownHandler, false);
+            document.addEventListener('keyup', keyUpHandler, false);
+            canvas.addEventListener('mousemove', mouseMoveHandler, false);
+
+            let frameCount = 0;
+            function draw() {
+                if (!gameRunning) return;
+                frameCount++;
+                ctx.clearRect(0, 0, WIDTH, HEIGHT);
+                drawBackgroundImage();
+                drawBricks();
+                drawBalls();
+                drawPaddle();
+
+                for (let i = balls.length - 1; i >= 0; i--) {
+                    const ball = balls[i];
+
+                    if (ball.x + ball.dx > WIDTH - ball.radius || ball.x + ball.dx < ball.radius) {
+                        ball.dx = -ball.dx;
+                    }
+                    if (ball.y + ball.dy < ball.radius) {
+                        ball.dy = -ball.dy;
+                    } else if (ball.y + ball.dy > HEIGHT - ball.radius - paddle.height - 5) {
+                        if (ball.x > paddle.x && ball.x < paddle.x + paddle.width) {
+                            const hitPos = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+                            const speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+                            ball.dx = hitPos * speed;
+                            ball.dy = -Math.abs(ball.dy);
+                        } else if (ball.y + ball.dy > HEIGHT - ball.radius) {
+                            balls.splice(i, 1);
+                            continue;
+                        }
+                    }
+
+                    if (frameCount % moveEvery === 0) {
+                        collisionDetection(ball);
+                        ball.x += ball.dx;
+                        ball.y += ball.dy;
+                    }
+                }
+
+                if (balls.length === 0) {
+                    lives--;
+                    livesDisplay.textContent = lives;
+                    if (lives <= 0) {
+                        pauseAndShowOverlay(
+                            'Game Over! Final score: ' + score,
+                            'Restart',
+                            () => {
+                                showLevelSelect();
+                            }
+                        );
+                        return;
+                    } else {
+                        resetBallAndPaddle();
+                    }
+                }
+
+                if (rightPressed) {
+                    paddle.x = Math.min(paddle.x + paddle.speed, WIDTH - paddle.width);
+                } else if (leftPressed) {
+                    paddle.x = Math.max(paddle.x - paddle.speed, 0);
+                }
+
+                animationId = requestAnimationFrame(draw);
+            }
+
+            // Induláskor pályaválasztó jelenik meg
+            showLevelSelect();
+        })();
+    </script>
+</body>
+</html>
