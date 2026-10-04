@@ -40,7 +40,7 @@
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.85);
             color: #fff;
             display: flex;
             flex-direction: column;
@@ -57,8 +57,8 @@
             font-size: 22px;
         }
         #overlay button {
-            padding: 10px 24px;
-            font-size: 16px;
+            padding: 10px 16px;
+            font-size: 15px;
             cursor: pointer;
             border: none;
             border-radius: 4px;
@@ -70,8 +70,8 @@
             background: #45a049;
         }
         #levelButtons {
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
             gap: 10px;
         }
         #overlay.hidden {
@@ -90,14 +90,15 @@
         <canvas id="gameCanvas" width="480" height="700"></canvas>
         <div id="overlay">
             <div id="overlayText">Válassz pályát!</div>
-            <div id="levelButtons">
-                <button id="btnLevel1">Pálya 1</button>
-                <button id="btnLevel2">Pálya 2</button>
-                <button id="btnLevel3">Pálya 3</button>
-            </div>
+            <div id="levelButtons"></div>
             <button id="overlayButton" style="display:none;">Restart</button>
+            <button id="overlayButton2" style="display:none;">Pályaválasztó</button>
         </div>
     </div>
+    <label style="margin-top:10px;color:#222;font-size:14px;">
+        <input type="checkbox" id="launchCheck"> Kattintásra / Space-re induló labda
+    </label>
+    <div style="margin-top:4px;color:#555;font-size:13px;">P vagy Space: szünet</div>
     <script>
         (function () {
             const canvas = document.getElementById('gameCanvas');
@@ -109,12 +110,18 @@
             const overlayText = document.getElementById('overlayText');
             const overlayButton = document.getElementById('overlayButton');
             const levelButtons = document.getElementById('levelButtons');
-            const btnLevel1 = document.getElementById('btnLevel1');
-            const btnLevel2 = document.getElementById('btnLevel2');
-            const btnLevel3 = document.getElementById('btnLevel3');
-
+            const overlayButton2 = document.getElementById('overlayButton2');
+            const launchCheck = document.getElementById('launchCheck');
+            launchCheck.addEventListener('change', () => launchCheck.blur());
             const WIDTH = canvas.width;
             const HEIGHT = canvas.height;
+            const BALL_SPEED = 5;         
+            const BALL_RADIUS = 6;
+            const MAX_BALLS = 12;
+            const DROP_CHANCE = 0.12;      
+            const POWERUP_FALL_SPEED = 2.4;
+            const EFFECT_DURATION = 600;   
+            const LAUNCH_DELAY = 50;       
             const basePaddleWidth = 75;
             const paddle = {
                 width: basePaddleWidth,
@@ -122,73 +129,130 @@
                 x: (WIDTH - basePaddleWidth) / 2,
                 speed: 10
             };
-            let balls = [];
-            const ballRadius = 6;
-
-            function makeBall(x, y, dx, dy) {
-                return { x, y, dx, dy, radius: ballRadius };
-            }
-
-            // --- Tégla-terület: ez a rész marad mindig teljesen lefedve ---
-            // (a "kép" ezen a területen bújik meg a téglák mögött)
+            const paddleTop = HEIGHT - paddle.height - 5;
             const brickAreaX = 20;
             const brickAreaY = 40;
-            const brickAreaWidth = WIDTH - brickAreaX * 2;   // 440
-            const brickAreaHeight = brickAreaWidth;          // négyzet alakú terület a képhez
-            const brickGap = 6;                               // rés a téglák között
-
-            // Ezek pályánként újraszámolódnak, hogy a terület mindig TELJESEN
-            // ki legyen töltve, csak egyre több és egyre kisebb téglával.
-            let brickRowCount, brickColumnCount, brickWidth, brickHeight, hitboxExpand;
-
-            // Háttérképek pályánként, amik a téglák mögött bújnak meg, és a
-            // téglák törésével fokozatosan válnak láthatóvá.
-            // Írd be ide a saját képeid URL-jét (pl. 'https://example.com/kep1.jpg').
-            // Megjegyzés: ez a betöltési mód csak akkor működik, ha a fájlt
-            // saját magad futtatod / hosztolod - egy Claude artifactként
-            // publikált oldal nem tud külső kép URL-eket betölteni.
+            const brickAreaWidth = WIDTH - brickAreaX * 2;  
+            const brickAreaHeight = brickAreaWidth;        
+            const brickGap = 6;
+            let brickRowCount, brickColumnCount, brickWidth, brickHeight;
+            let rowOffsets = [];  
+            let rowSpeeds = [];    
+            let patrols = [];      
             function loadImage(src) {
-                const obj = { img: new Image(), loaded: false };
+                const obj = { img: new Image(), loaded: false, src: src };
                 obj.img.onload = function () { obj.loaded = true; };
                 obj.img.onerror = function () {
-                    console.error('Nem sikerült betölteni a képet:', src);
+                    console.warn('Kép nem található (helyőrző marad):', src);
                 };
                 obj.img.src = src;
                 return obj;
             }
 
-            const levelImages = [
-                loadImage('temp_img/kep1.jpg'),
-                loadImage('temp_img/kep2.png'),
-                loadImage('temp_img/kep3.png')
-            ];
-
-            // 3 pálya – mindegyik teljesen tele van téglával, csak a méret/darabszám nő
             const levels = [
                 {
-                    // Pálya 1 – alap sűrűség
-                    rows: 4,
-                    cols: 7,
+                    name: 'Klasszikus',
+                    rows: 4, cols: 7,
                     colors: ['#e63946', '#f4a261', '#e9c46a', '#2a9d8f'],
-                    speedMultiplier: 1
+                    image: 'temp_img/kep1.jpg'
                 },
                 {
-                    // Pálya 2 – több, kisebb tégla
-                    rows: 6,
-                    cols: 10,
+                    name: 'Sűrű',
+                    rows: 6, cols: 10,
                     colors: ['#8e44ad', '#3498db', '#1abc9c', '#f1c40f', '#e67e22', '#16a085'],
-                    speedMultiplier: 1.2
+                    image: 'temp_img/kep2.png', hits: (r) => (r === 0 ? 2 : 1)
                 },
                 {
-                    // Pálya 3 – még sűrűbb, még kisebb téglák
-                    rows: 8,
-                    cols: 13,
+                    name: 'Tömör',
+                    rows: 8, cols: 13,
                     colors: ['#e76f51', '#2a9d8f', '#264653', '#e9c46a', '#8e44ad', '#3498db', '#c0392b', '#16a085'],
-                    speedMultiplier: 1.4
+                    image: 'temp_img/kep3.png', hits: (r) => (r < 2 ? 2 : 1)
+                },
+                {
+                    name: 'Oszlopok',
+                    rows: 8, cols: 11,
+                    colors: ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#073b4b', '#ef476f', '#ffd166', '#06d6a0'],
+                    image: 'temp_img/kep4.png', hits: (r) => (r <= 1 ? 2 : 1),            // HELYŐRZŐ
+                    solid: (r, c) => r >= 1 && r <= 5 && c % 4 === 1
+                },
+                {
+                    name: 'Rombusz',
+                    rows: 9, cols: 9,
+                    colors: ['#f72585', '#b5179e', '#7209b7', '#560bad', '#480ca8', '#3a0ca3', '#3f37c9', '#4361ee', '#4895ef'],
+                    image: 'temp_img/kep5.png', hits: (r, c) => (r >= 3 && r <= 5 && c >= 3 && c <= 5 ? 3 : 1),            // HELYŐRZŐ
+                    solid: (r, c) => (r === c || r + c === 8) && r >= 2 && r <= 6
+                },
+                {
+                    name: 'Futószalag',
+                    rows: 8, cols: 12,
+                    colors: ['#ff6b6b', '#feca57', '#48dbfb', '#1dd1a1', '#ff9ff3', '#54a0ff', '#5f27cd', '#ee5253'],
+                    image: 'temp_img/kep6.png', hits: (r) => (r === 3 || r === 4 ? 2 : 1),            // HELYŐRZŐ
+                    rowSpeed: (r) => (r % 2 === 0 ? 0.7 : -0.7)
+                },
+                {
+                    name: 'Erőd',
+                    rows: 10, cols: 13,
+                    colors: ['#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51', '#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51'],
+                    image: 'temp_img/kep7.png', hits: (r, c) => (r >= 4 && r <= 5 && c >= 4 && c <= 8 ? 3 : 1),            // HELYŐRZŐ
+                    solid: (r, c) => {
+                        const frameH = (r === 3 || r === 6) && c >= 3 && c <= 9;
+                        const frameV = (c === 3 || c === 9) && r >= 3 && r <= 6;
+                        return (frameH || frameV) && !(r === 6 && c === 6);
+                    }
+                },
+                {
+                    name: 'Akadálypálya',
+                    rows: 7, cols: 10,
+                    colors: ['#ff595e', '#ffca3a', '#8ac926', '#1982c4', '#6a4c93', '#ff595e', '#ffca3a'],
+                    image: 'temp_img/kep8.png', hits: (r) => (r === 0 ? 3 : 1),            // HELYŐRZŐ
+                    solid: (r, c) => r === 3 && (c === 2 || c === 7),
+                    patrols: [
+                        { x: 60, y: 520, w: 90, vx: 1.6 },
+                        { x: 300, y: 575, w: 70, vx: -2.1 }
+                    ]
+                },
+                {
+                    name: 'Cikcakk',
+                    rows: 10, cols: 14,
+                    colors: ['#f94144', '#f3722c', '#f8961e', '#f9c74f', '#90be6d', '#43aa8b', '#4d908e', '#577590', '#277da1', '#6a4c93'],
+                    image: 'temp_img/kep9.png', hits: (r) => (r % 4 === 0 ? 2 : 1),            // HELYŐRZŐ
+                    solid: (r, c) => (r === 4 || r === 5) && c % 5 === 0,
+                    rowSpeed: (r) => [0.5, -0.8, 1.0, -0.6, 0.6, -0.6, 0.9, -1.1, 0.7, -0.5][r]
+                },
+                {
+                    name: 'Finálé',
+                    rows: 10, cols: 15,
+                    colors: ['#03045e', '#023e8a', '#0077b6', '#0096c7', '#00b4d8', '#48cae4', '#90e0ef', '#ade8f4', '#caf0f8', '#e0fbfc'],
+                    image: 'temp_img/kep10.png', hits: (r) => (r < 2 ? 3 : r < 4 ? 2 : 1),           // HELYŐRZŐ
+                    solid: (r, c) => r >= 2 && r <= 7 && (r + c) % 7 === 0,
+                    rowSpeed: (r) => (r % 3 === 2 ? (r % 2 === 0 ? -0.7 : 0.7) : 0),
+                    patrols: [
+                        { x: 150, y: 565, w: 100, vx: 2.2 }
+                    ]
                 }
             ];
-
+            levels.forEach(l => { l.imageObj = loadImage(l.image); });
+            const POWERUPS = {
+                slow:  { label: 'S', color: '#3498db', text: 'Lassú labda',          weight: 20 },
+                fast:  { label: 'F', color: '#e74c3c', text: 'Gyors labda',          weight: 15 },
+                multi: { label: 'M', color: '#2ecc71', text: 'Extra labdák az ütőről', weight: 20 },
+                split: { label: '×', color: '#f39c12', text: 'Labdák megkettőzve',   weight: 20 },
+                wide:  { label: 'W', color: '#9b59b6', text: 'Széles ütő',           weight: 20 },
+                life:  { label: '♥', color: '#ff5c8a', text: '+1 élet',              weight: 5 }
+            };
+            const POWERUP_KEYS = Object.keys(POWERUPS);
+            const POWERUP_TOTAL_WEIGHT = POWERUP_KEYS.reduce((s, k) => s + POWERUPS[k].weight, 0);
+            function randomPowerUpType() {
+                let roll = Math.random() * POWERUP_TOTAL_WEIGHT;
+                for (const k of POWERUP_KEYS) {
+                    roll -= POWERUPS[k].weight;
+                    if (roll <= 0) return k;
+                }
+                return POWERUP_KEYS[0];
+            }
+            let balls = [];
             let bricks = [];
+            let powerUps = [];
             let currentLevel = 0;
             let score = 0;
             let lives = 3;
@@ -196,19 +260,51 @@
             let leftPressed = false;
             let gameRunning = false;
             let animationId = null;
-            const baseMoveEvery = 3;
-            let moveEvery = baseMoveEvery;
-
+            let lastTs = 0;
+            let launchTimer = 0;
+            let combo = 0;
+            let paused = false;
+            const comboMultiplier = () => Math.min(1 + Math.floor(combo / 5), 8);
+            let speedFactor = 1;
+            let speedTimer = 0;
+            let wideTimer = 0;
+            let toast = { text: '', timer: 0 };
+            const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+            function makeBall(x, y, angleFromVertical) {
+                return { x, y, vx: Math.sin(angleFromVertical), vy: -Math.cos(angleFromVertical), dead: false };
+            }
+            function rotateBall(ball, delta) {
+                const cos = Math.cos(delta), sin = Math.sin(delta);
+                const nvx = ball.vx * cos - ball.vy * sin;
+                const nvy = ball.vx * sin + ball.vy * cos;
+                ball.vx = nvx;
+                ball.vy = nvy;
+                keepBallAngleSane(ball);
+            }
+            function keepBallAngleSane(ball) {
+                const minVy = 0.2;
+                if (Math.abs(ball.vy) < minVy) {
+                    ball.vy = (ball.vy < 0 ? -1 : 1) * minVy;
+                }
+                const len = Math.hypot(ball.vx, ball.vy);
+                ball.vx /= len;
+                ball.vy /= len;
+            }
+            function setPaddleWidth(newWidth) {
+                const center = paddle.x + paddle.width / 2;
+                paddle.width = newWidth;
+                paddle.x = clamp(center - newWidth / 2, 0, WIDTH - newWidth);
+            }
+            function showToast(text) {
+                toast.text = text;
+                toast.timer = 100;
+            }
             function computeBrickGeometry(levelIndex) {
                 const level = levels[levelIndex];
                 brickRowCount = level.rows;
                 brickColumnCount = level.cols;
-                // A terület (brickAreaWidth x brickAreaHeight) mindig teljesen
-                // kitöltésre kerül: minél több a sor/oszlop, annál kisebb lesz
-                // egy-egy tégla, de az összterület fedettsége ugyanaz marad.
                 brickWidth = (brickAreaWidth - (brickColumnCount - 1) * brickGap) / brickColumnCount;
                 brickHeight = (brickAreaHeight - (brickRowCount - 1) * brickGap) / brickRowCount;
-                hitboxExpand = Math.max(0, brickGap / 2 - 1);
             }
 
             function buildBricks(levelIndex) {
@@ -219,38 +315,234 @@
                     bricks[c] = [];
                     for (let r = 0; r < brickRowCount; r++) {
                         bricks[c][r] = {
-                            x: 0,
-                            y: 0,
-                            status: 1, // minden szinten minden tégla aktív -> teljes lefedettség
+                            status: 1,
+                            solid: !!(level.solid && level.solid(r, c)),
+                            hits: level.hits ? level.hits(r, c) : 1,
+                            maxHits: level.hits ? level.hits(r, c) : 1,
                             color: level.colors[r % level.colors.length]
                         };
                     }
                 }
-            }
+                const reachable = [];
+                for (let c = 0; c < brickColumnCount; c++) reachable[c] = new Array(brickRowCount).fill(false);
+                const queue = [];
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const onBorder = r === 0 || r === brickRowCount - 1 || c === 0 || c === brickColumnCount - 1;
+                        if (onBorder && !bricks[c][r].solid) {
+                            reachable[c][r] = true;
+                            queue.push([c, r]);
+                        }
+                    }
+                }
+                while (queue.length) {
+                    const [c, r] = queue.shift();
+                    [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dc, dr]) => {
+                        const nc = c + dc, nr = r + dr;
+                        if (nc < 0 || nr < 0 || nc >= brickColumnCount || nr >= brickRowCount) return;
+                        if (bricks[nc][nr].solid || reachable[nc][nr]) return;
+                        reachable[nc][nr] = true;
+                        queue.push([nc, nr]);
+                    });
+                }
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        if (!bricks[c][r].solid && !reachable[c][r]) bricks[c][r].solid = true;
+                    }
+                }
 
+                rowOffsets = new Array(brickRowCount).fill(0);
+                rowSpeeds = [];
+                for (let r = 0; r < brickRowCount; r++) {
+                    rowSpeeds[r] = level.rowSpeed ? level.rowSpeed(r) : 0;
+                }
+                patrols = (level.patrols || []).map(p => ({ x: p.x, y: p.y, w: p.w, h: 12, vx: p.vx }));
+            }
+            function brickRects(c, r) {
+                const cw = brickWidth + brickGap;
+                const totalW = brickColumnCount * cw;
+                const x = (((c * cw + rowOffsets[r]) % totalW) + totalW) % totalW;
+                const y = brickAreaY + r * (brickHeight + brickGap);
+                const out = [];
+                [x, x - totalW].forEach(px => {
+                    const left = Math.max(px + brickAreaX, brickAreaX);
+                    const right = Math.min(px + brickAreaX + brickWidth, brickAreaX + brickAreaWidth);
+                    if (right > left + 0.5) out.push({ l: left, r: right, t: y, b: y + brickHeight });
+                });
+                return out;
+            }
+            function bricksRemaining() {
+                let count = 0;
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status === 1 && !b.solid) count++;
+                    }
+                }
+                return count;
+            }
+            function resetEffects() {
+                speedFactor = 1;
+                speedTimer = 0;
+                wideTimer = 0;
+                setPaddleWidth(basePaddleWidth);
+            }
             function resetBallAndPaddle() {
-                paddle.width = basePaddleWidth;
+                resetEffects();
+                powerUps = [];
                 paddle.x = (WIDTH - paddle.width) / 2;
-                moveEvery = baseMoveEvery;
-                const level = levels[currentLevel];
-                const baseSpeed = 1.5 * level.speedMultiplier;
-                const dx = baseSpeed * (Math.random() < 0.5 ? 1 : -1);
-                balls = [makeBall(WIDTH / 2, HEIGHT - 30, dx, -baseSpeed)];
+                const angle = (Math.random() < 0.5 ? 1 : -1) * (0.2 + Math.random() * 0.4);
+                balls = [makeBall(WIDTH / 2, paddleTop - BALL_RADIUS, angle)];
+                combo = 0;
+                launchTimer = launchCheck.checked ? Infinity : LAUNCH_DELAY;
             }
-
-            function startLevel(levelIndex) {
+            function startLevel(levelIndex, carry) {
                 currentLevel = levelIndex;
                 buildBricks(currentLevel);
                 resetBallAndPaddle();
                 levelDisplay.textContent = currentLevel + 1;
-                score = 0;
-                lives = 3;
+                if (!carry) {
+                    score = 0;
+                    lives = 3;
+                }
                 scoreDisplay.textContent = score;
                 livesDisplay.textContent = lives;
             }
+            function hitRect(ball, l, t, r, b) {
+                const R = BALL_RADIUS;
+                const cx = clamp(ball.x, l, r);
+                const cy = clamp(ball.y, t, b);
+                const dx = ball.x - cx;
+                const dy = ball.y - cy;
+                if (dx * dx + dy * dy >= R * R) return false;
 
+                if (dx === 0 && dy === 0) {
+                    const ol = ball.x - l, or = r - ball.x, ot = ball.y - t, ob = b - ball.y;
+                    const m = Math.min(ol, or, ot, ob);
+                    if (m === ol) { ball.x = l - R; ball.vx = -Math.abs(ball.vx); }
+                    else if (m === or) { ball.x = r + R; ball.vx = Math.abs(ball.vx); }
+                    else if (m === ot) { ball.y = t - R; ball.vy = -Math.abs(ball.vy); }
+                    else { ball.y = b + R; ball.vy = Math.abs(ball.vy); }
+                } else if (Math.abs(dx) > Math.abs(dy)) {
+                    ball.vx = dx > 0 ? Math.abs(ball.vx) : -Math.abs(ball.vx);
+                    ball.x = dx > 0 ? r + R : l - R;
+                } else {
+                    ball.vy = dy > 0 ? Math.abs(ball.vy) : -Math.abs(ball.vy);
+                    ball.y = dy > 0 ? b + R : t - R;
+                }
+                keepBallAngleSane(ball);
+                return true;
+            }
+
+            function registerBrickHit(b, rect) {
+                combo++;
+                score += 10 * comboMultiplier();
+                scoreDisplay.textContent = score;
+                b.hits--;
+                if (b.hits <= 0) destroyBrick(b, rect);
+            }
+            function destroyBrick(b, rect) {
+                b.status = 0;
+
+                if (Math.random() < DROP_CHANCE) {
+                    powerUps.push({
+                        x: (rect.l + rect.r) / 2,
+                        y: (rect.t + rect.b) / 2,
+                        type: randomPowerUpType()
+                    });
+                }
+                if (bricksRemaining() === 0) handleLevelClear();
+            }
+            function brickCollision(ball) {
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status !== 1) continue;
+                        const rects = brickRects(c, r);
+                        for (const rect of rects) {
+                            if (hitRect(ball, rect.l, rect.t, rect.r, rect.b)) {
+                                if (!b.solid) registerBrickHit(b, rect);
+                                return true; // egy lépésben csak egy találat
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+
+            function stepBall(ball, dt) {
+                const R = BALL_RADIUS;
+                const dist = BALL_SPEED * speedFactor * dt;
+                const n = Math.max(1, Math.ceil(dist / 3));
+                const s = dist / n;
+
+                for (let i = 0; i < n; i++) {
+                    ball.x += ball.vx * s;
+                    ball.y += ball.vy * s;
+                    if (ball.x < R) { ball.x = R; ball.vx = Math.abs(ball.vx); }
+                    else if (ball.x > WIDTH - R) { ball.x = WIDTH - R; ball.vx = -Math.abs(ball.vx); }
+                    if (ball.y < R) { ball.y = R; ball.vy = Math.abs(ball.vy); keepBallAngleSane(ball); }
+                    if (ball.vy > 0 &&
+                        ball.y + R >= paddleTop && ball.y < paddleTop + paddle.height &&
+                        ball.x >= paddle.x - R * 0.5 && ball.x <= paddle.x + paddle.width + R * 0.5) {
+                        const hitPos = clamp((ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2), -1, 1);
+                        const angle = hitPos * (Math.PI / 3); // max 60 fok a függőlegestől
+                        ball.vx = Math.sin(angle);
+                        ball.vy = -Math.cos(angle);
+                        ball.y = paddleTop - R;
+                        combo = 0;
+                    }
+                    for (const p of patrols) {
+                        hitRect(ball, p.x, p.y, p.x + p.w, p.y + p.h);
+                    }
+                    brickCollision(ball);
+                    if (!gameRunning) return;
+                    if (ball.y - R > HEIGHT) {
+                        ball.dead = true;
+                        return;
+                    }
+                }
+            }
+            function applyPowerUp(type) {
+                showToast(POWERUPS[type].text);
+                switch (type) {
+                    case 'slow':
+                        speedFactor = 0.65;
+                        speedTimer = EFFECT_DURATION;
+                        break;
+                    case 'fast':
+                        speedFactor = 1.35;
+                        speedTimer = EFFECT_DURATION;
+                        break;
+                    case 'multi': {
+                        const px = paddle.x + paddle.width / 2;
+                        [-0.35, 0.35].forEach(a => {
+                            if (balls.length < MAX_BALLS) balls.push(makeBall(px, paddleTop - BALL_RADIUS, a));
+                        });
+                        break;
+                    }
+                    case 'split': {
+                        const snapshot = balls.slice();
+                        snapshot.forEach((b, i) => {
+                            if (balls.length >= MAX_BALLS) return;
+                            const copy = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, dead: false };
+                            rotateBall(copy, (i % 2 === 0 ? 1 : -1) * 0.5);
+                            balls.push(copy);
+                        });
+                        break;
+                    }
+                    case 'wide':
+                        wideTimer = EFFECT_DURATION * 1.2;
+                        setPaddleWidth(basePaddleWidth * 1.6);
+                        break;
+                    case 'life':
+                        lives++;
+                        livesDisplay.textContent = lives;
+                        break;
+                }
+            }
             function drawBackgroundImage() {
-                const levelImage = levelImages[currentLevel];
+                const levelImage = levels[currentLevel].imageObj;
                 ctx.save();
                 ctx.beginPath();
                 ctx.rect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
@@ -260,153 +552,211 @@
                 } else {
                     ctx.fillStyle = '#333';
                     ctx.fillRect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
+                    ctx.fillStyle = '#777';
+                    ctx.font = '16px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Háttérkép helyőrző', brickAreaX + brickAreaWidth / 2, brickAreaY + brickAreaHeight / 2 - 8);
+                    ctx.fillText(levels[currentLevel].image, brickAreaX + brickAreaWidth / 2, brickAreaY + brickAreaHeight / 2 + 14);
                 }
                 ctx.restore();
             }
-
+            function drawSolidBrick(l, t, w, h) {
+                ctx.fillStyle = '#7f8c8d';
+                ctx.fillRect(l, t, w, h);
+                ctx.strokeStyle = '#4a5557';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(l + 0.5, t + 0.5, w - 1, h - 1);
+                ctx.beginPath();
+                ctx.moveTo(l + 2, t + 2); ctx.lineTo(l + w - 2, t + h - 2);
+                ctx.moveTo(l + w - 2, t + 2); ctx.lineTo(l + 2, t + h - 2);
+                ctx.stroke();
+            }
+            function drawBricks() {
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
+                ctx.clip();
+                for (let c = 0; c < brickColumnCount; c++) {
+                    for (let r = 0; r < brickRowCount; r++) {
+                        const b = bricks[c][r];
+                        if (b.status !== 1) continue;
+                        brickRects(c, r).forEach(rect => {
+                            if (b.solid) {
+                                drawSolidBrick(rect.l, rect.t, rect.r - rect.l, rect.b - rect.t);
+                            } else {
+                                ctx.fillStyle = b.color;
+                                ctx.fillRect(rect.l, rect.t, rect.r - rect.l, rect.b - rect.t);
+                                if (b.maxHits > 1 && rect.r - rect.l > 14) {
+                                    ctx.font = 'bold ' + Math.min(15, Math.floor(brickHeight * 0.7)) + 'px Arial';
+                                    ctx.textAlign = 'center';
+                                    ctx.textBaseline = 'middle';
+                                    ctx.lineWidth = 3;
+                                    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+                                    ctx.strokeText(b.hits, (rect.l + rect.r) / 2, (rect.t + rect.b) / 2 + 1);
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(b.hits, (rect.l + rect.r) / 2, (rect.t + rect.b) / 2 + 1);
+                                }
+                            }
+                        });
+                    }
+                }
+                ctx.restore();
+            }
+            function drawPatrols() {
+                patrols.forEach(p => drawSolidBrick(p.x, p.y, p.w, p.h));
+            }
+            function drawPowerUps() {
+                powerUps.forEach(p => {
+                    const def = POWERUPS[p.type];
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+                    ctx.fillStyle = def.color;
+                    ctx.fill();
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = '#fff';
+                    ctx.stroke();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 13px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(def.label, p.x, p.y + 1);
+                    ctx.textBaseline = 'alphabetic';
+                });
+            }
             function drawBalls() {
                 balls.forEach(ball => {
                     ctx.beginPath();
-                    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                    ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
                     ctx.fillStyle = '#ffffff';
                     ctx.fill();
                     ctx.closePath();
                 });
             }
-
             function drawPaddle() {
-                ctx.beginPath();
-                ctx.rect(paddle.x, HEIGHT - paddle.height - 5, paddle.width, paddle.height);
                 ctx.fillStyle = '#00bcd4';
-                ctx.fill();
-                ctx.closePath();
+                ctx.fillRect(paddle.x, paddleTop, paddle.width, paddle.height);
             }
-
-            function drawBricks() {
-                for (let c = 0; c < brickColumnCount; c++) {
-                    for (let r = 0; r < brickRowCount; r++) {
-                        const b = bricks[c][r];
-                        if (b.status === 1) {
-                            const brickX = c * (brickWidth + brickGap) + brickAreaX;
-                            const brickY = r * (brickHeight + brickGap) + brickAreaY;
-                            b.x = brickX;
-                            b.y = brickY;
-                            ctx.beginPath();
-                            ctx.rect(brickX, brickY, brickWidth, brickHeight);
-                            ctx.fillStyle = b.color;
-                            ctx.fill();
-                            ctx.closePath();
-                        }
-                    }
+            function drawStatus() {
+                ctx.font = '13px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillStyle = '#ddd';
+                const parts = [];
+                if (speedTimer > 0) parts.push((speedFactor < 1 ? 'Lassú ' : 'Gyors ') + Math.ceil(speedTimer / 60) + 'mp');
+                if (wideTimer > 0) parts.push('Széles ' + Math.ceil(wideTimer / 60) + 'mp');
+                ctx.fillText(parts.join('  |  '), brickAreaX, 26);
+                if (combo >= 2) {
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#7bed9f';
+                    ctx.fillText('Kombó ' + combo + ' (×' + comboMultiplier() + ')', WIDTH / 2, 26);
+                }
+                if (launchTimer === Infinity) {
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '15px Arial';
+                    ctx.fillText('Kattints vagy nyomj Space-t az indításhoz', WIDTH / 2, paddleTop - 45);
+                }
+                if (toast.timer > 0) {
+                    ctx.textAlign = 'right';
+                    ctx.fillStyle = '#ffd166';
+                    ctx.fillText(toast.text, brickAreaX + brickAreaWidth, 26);
                 }
             }
-
-            function bricksRemaining() {
-                let count = 0;
-                for (let c = 0; c < brickColumnCount; c++) {
-                    for (let r = 0; r < brickRowCount; r++) {
-                        if (bricks[c][r].status === 1) count++;
-                    }
-                }
-                return count;
+            function drawPauseText() {
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 32px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('SZÜNET', WIDTH / 2, HEIGHT / 2);
+                ctx.font = '15px Arial';
+                ctx.fillText('P vagy Space a folytatáshoz', WIDTH / 2, HEIGHT / 2 + 30);
             }
-
+            function render() {
+                ctx.clearRect(0, 0, WIDTH, HEIGHT);
+                drawBackgroundImage();
+                drawBricks();
+                drawPatrols();
+                drawPowerUps();
+                drawBalls();
+                drawPaddle();
+                drawStatus();
+            }
             function handleLevelClear() {
-                // Egy pálya van kiválasztva – ha azt kitörted, nyertél
-                pauseAndShowOverlay(
-                    'You win!',
-                    'Restart',
-                    () => {
-                        showLevelSelect();
-                    }
-                );
-            }
-
-            function collisionDetection(ball) {
-                for (let c = 0; c < brickColumnCount; c++) {
-                    for (let r = 0; r < brickRowCount; r++) {
-                        const b = bricks[c][r];
-                        if (b.status === 1) {
-                            const left = b.x - hitboxExpand;
-                            const right = b.x + brickWidth + hitboxExpand;
-                            const top = b.y - hitboxExpand;
-                            const bottom = b.y + brickHeight + hitboxExpand;
-
-                            if (
-                                ball.x + ball.radius > left &&
-                                ball.x - ball.radius < right &&
-                                ball.y + ball.radius > top &&
-                                ball.y - ball.radius < bottom
-                            ) {
-                                // Kiszámoljuk, melyik oldalról érkezett a labda, hogy
-                                // helyesen pattanjon: oldalról jövő ütésnél a
-                                // vízszintes, felül/alul jövő ütésnél a függőleges
-                                // irányt kell megfordítani.
-                                const centerX = (left + right) / 2;
-                                const centerY = (top + bottom) / 2;
-                                const halfWidth = (right - left) / 2;
-                                const halfHeight = (bottom - top) / 2;
-
-                                const overlapX = halfWidth + ball.radius - Math.abs(ball.x - centerX);
-                                const overlapY = halfHeight + ball.radius - Math.abs(ball.y - centerY);
-
-                                if (overlapX < overlapY) {
-                                    ball.dx = -ball.dx;
-                                } else {
-                                    ball.dy = -ball.dy;
-                                }
-
-                                b.status = 0;
-                                score += 10;
-                                scoreDisplay.textContent = score;
-                                if (bricksRemaining() === 0) {
-                                    handleLevelClear();
-                                }
-                                // Csak egy téglát törünk el ellenőrzésenként, hogy a labda
-                                // ne tudjon "egyszerre" két szomszédos téglát kiütni.
-                                return;
-                            }
-                        }
-                    }
+                if (currentLevel < levels.length - 1) {
+                    pauseAndShowOverlay(
+                        'Pálya teljesítve! (' + (currentLevel + 1) + '/' + levels.length + ')',
+                        'Következő pálya', () => startGame(currentLevel + 1, true),
+                        'Pályaválasztó', () => showLevelSelect()
+                    );
+                } else {
+                    pauseAndShowOverlay('You win! Minden pályát teljesítettél!', 'Restart', () => { showLevelSelect(); });
                 }
             }
-
             function showLevelSelect() {
                 gameRunning = false;
                 cancelAnimationFrame(animationId);
                 overlayText.textContent = 'Válassz pályát!';
-                levelButtons.style.display = 'flex';
+                levelButtons.style.display = 'grid';
                 overlayButton.style.display = 'none';
+                overlayButton2.style.display = 'none';
                 overlay.classList.remove('hidden');
             }
-
-            function pauseAndShowOverlay(text, buttonLabel, onContinue) {
+            function pauseAndShowOverlay(text, buttonLabel, onContinue, label2, onSecond) {
                 gameRunning = false;
                 cancelAnimationFrame(animationId);
                 overlayText.textContent = text;
                 levelButtons.style.display = 'none';
                 overlayButton.style.display = 'block';
                 overlayButton.textContent = buttonLabel;
+                if (label2) {
+                    overlayButton2.style.display = 'block';
+                    overlayButton2.textContent = label2;
+                    overlayButton2.onclick = () => {
+                        overlay.classList.add('hidden');
+                        onSecond();
+                    };
+                } else {
+                    overlayButton2.style.display = 'none';
+                }
                 overlay.classList.remove('hidden');
                 overlayButton.onclick = () => {
                     overlay.classList.add('hidden');
                     onContinue();
                 };
             }
-
-            function startGame(levelIndex) {
+            function startGame(levelIndex, carry) {
                 overlay.classList.add('hidden');
-                startLevel(levelIndex);
+                startLevel(levelIndex, carry);
+                paused = false;
                 gameRunning = true;
-                draw();
+                lastTs = 0;
+                animationId = requestAnimationFrame(loop);
+            }
+            levels.forEach((level, i) => {
+                const btn = document.createElement('button');
+                btn.textContent = (i + 1) + '. ' + level.name;
+                btn.addEventListener('click', () => startGame(i));
+                levelButtons.appendChild(btn);
+            });
+            function launchBall() {
+                if (launchTimer === Infinity) launchTimer = 0;
+            }
+            function togglePause() {
+                if (gameRunning) paused = !paused;
             }
 
-            // Pályaválasztó gombok
-            btnLevel1.addEventListener('click', () => startGame(0));
-            btnLevel2.addEventListener('click', () => startGame(1));
-            btnLevel3.addEventListener('click', () => startGame(2));
-
             function keyDownHandler(e) {
+                if (e.key === 'p' || e.key === 'P') {
+                    if (!e.repeat) togglePause();
+                    return;
+                }
+                if (e.key === ' ' || e.code === 'Space') {
+                    e.preventDefault();
+                    if (e.repeat || !gameRunning) return;
+                    if (!paused && launchTimer === Infinity) launchBall();
+                    else togglePause();
+                    return;
+                }
                 if (e.key === 'Right' || e.key === 'ArrowRight') rightPressed = true;
                 else if (e.key === 'Left' || e.key === 'ArrowLeft') leftPressed = true;
             }
@@ -418,78 +768,76 @@
                 const rect = canvas.getBoundingClientRect();
                 const relativeX = e.clientX - rect.left;
                 if (relativeX > 0 && relativeX < WIDTH) {
-                    paddle.x = Math.min(Math.max(relativeX - paddle.width / 2, 0), WIDTH - paddle.width);
+                    paddle.x = clamp(relativeX - paddle.width / 2, 0, WIDTH - paddle.width);
                 }
             }
 
             document.addEventListener('keydown', keyDownHandler, false);
             document.addEventListener('keyup', keyUpHandler, false);
             canvas.addEventListener('mousemove', mouseMoveHandler, false);
-
-            let frameCount = 0;
-            function draw() {
-                if (!gameRunning) return;
-                frameCount++;
-                ctx.clearRect(0, 0, WIDTH, HEIGHT);
-                drawBackgroundImage();
-                drawBricks();
-                drawBalls();
-                drawPaddle();
-
-                for (let i = balls.length - 1; i >= 0; i--) {
-                    const ball = balls[i];
-
-                    if (ball.x + ball.dx > WIDTH - ball.radius || ball.x + ball.dx < ball.radius) {
-                        ball.dx = -ball.dx;
+            canvas.addEventListener('click', () => { if (gameRunning && !paused) launchBall(); }, false);
+            function update(dt) {
+                if (speedTimer > 0) {
+                    speedTimer -= dt;
+                    if (speedTimer <= 0) { speedTimer = 0; speedFactor = 1; }
+                }
+                if (wideTimer > 0) {
+                    wideTimer -= dt;
+                    if (wideTimer <= 0) { wideTimer = 0; setPaddleWidth(basePaddleWidth); }
+                }
+                if (toast.timer > 0) toast.timer -= dt;
+                if (rightPressed) paddle.x = Math.min(paddle.x + paddle.speed * dt, WIDTH - paddle.width);
+                else if (leftPressed) paddle.x = Math.max(paddle.x - paddle.speed * dt, 0);
+                for (let r = 0; r < brickRowCount; r++) rowOffsets[r] += rowSpeeds[r] * dt;
+                patrols.forEach(p => {
+                    p.x += p.vx * dt;
+                    if (p.x < 10) { p.x = 10; p.vx = Math.abs(p.vx); }
+                    else if (p.x + p.w > WIDTH - 10) { p.x = WIDTH - 10 - p.w; p.vx = -Math.abs(p.vx); }
+                });
+                for (let i = powerUps.length - 1; i >= 0; i--) {
+                    const p = powerUps[i];
+                    p.y += POWERUP_FALL_SPEED * dt;
+                    const caught = p.y + 11 >= paddleTop && p.y - 11 <= paddleTop + paddle.height &&
+                                   p.x >= paddle.x - 8 && p.x <= paddle.x + paddle.width + 8;
+                    if (caught) {
+                        powerUps.splice(i, 1);
+                        applyPowerUp(p.type);
+                    } else if (p.y - 11 > HEIGHT) {
+                        powerUps.splice(i, 1);
                     }
-                    if (ball.y + ball.dy < ball.radius) {
-                        ball.dy = -ball.dy;
-                    } else if (ball.y + ball.dy > HEIGHT - ball.radius - paddle.height - 5) {
-                        if (ball.x > paddle.x && ball.x < paddle.x + paddle.width) {
-                            const hitPos = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
-                            const speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
-                            ball.dx = hitPos * speed;
-                            ball.dy = -Math.abs(ball.dy);
-                        } else if (ball.y + ball.dy > HEIGHT - ball.radius) {
-                            balls.splice(i, 1);
-                            continue;
-                        }
+                }
+                if (launchTimer === Infinity && !launchCheck.checked) launchTimer = LAUNCH_DELAY;
+                if (launchTimer > 0) {
+                    launchTimer -= dt;
+                    balls.forEach(b => { b.x = paddle.x + paddle.width / 2; });
+                } else {
+                    for (let i = 0; i < balls.length; i++) {
+                        stepBall(balls[i], dt);
+                        if (!gameRunning) return;
                     }
-
-                    if (frameCount % moveEvery === 0) {
-                        collisionDetection(ball);
-                        ball.x += ball.dx;
-                        ball.y += ball.dy;
-                    }
+                    balls = balls.filter(b => !b.dead);
                 }
 
                 if (balls.length === 0) {
                     lives--;
                     livesDisplay.textContent = lives;
                     if (lives <= 0) {
-                        pauseAndShowOverlay(
-                            'Game Over! Final score: ' + score,
-                            'Restart',
-                            () => {
-                                showLevelSelect();
-                            }
-                        );
-                        return;
+                        pauseAndShowOverlay('Game Over! Final score: ' + score, 'Restart', () => { showLevelSelect(); });
                     } else {
                         resetBallAndPaddle();
                     }
                 }
-
-                if (rightPressed) {
-                    paddle.x = Math.min(paddle.x + paddle.speed, WIDTH - paddle.width);
-                } else if (leftPressed) {
-                    paddle.x = Math.max(paddle.x - paddle.speed, 0);
-                }
-
-                animationId = requestAnimationFrame(draw);
             }
-
-            // Induláskor pályaválasztó jelenik meg
+            function loop(ts) {
+                if (!gameRunning) return;
+                if (!lastTs) lastTs = ts;
+                const dt = Math.min((ts - lastTs) / 16.667, 2.5);
+                lastTs = ts;
+                if (!paused) update(dt);
+                render();
+                if (paused) drawPauseText();
+                if (gameRunning) animationId = requestAnimationFrame(loop);
+            }
             showLevelSelect();
         })();
     </script>
