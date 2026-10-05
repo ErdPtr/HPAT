@@ -154,13 +154,13 @@
                     name: 'Klasszikus',
                     rows: 4, cols: 7,
                     colors: ['#e63946', '#f4a261', '#e9c46a', '#2a9d8f'],
-                    image: 'temp_img/kep1.jpg'
+                    image: 'temp_img/kep1.png'
                 },
                 {
                     name: 'Sűrű',
                     rows: 6, cols: 10,
                     colors: ['#8e44ad', '#3498db', '#1abc9c', '#f1c40f', '#e67e22', '#16a085'],
-                    image: 'temp_img/kep2.png', hits: (r) => (r === 0 ? 2 : 1)
+                    image: 'temp_img/kep2.jpg', hits: (r) => (r === 0 ? 2 : 1)
                 },
                 {
                     name: 'Tömör',
@@ -172,7 +172,7 @@
                     name: 'Oszlopok',
                     rows: 8, cols: 11,
                     colors: ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#073b4b', '#ef476f', '#ffd166', '#06d6a0'],
-                    image: 'temp_img/kep4.png', hits: (r) => (r <= 1 ? 2 : 1),            // HELYŐRZŐ
+                    image: 'temp_img/kep4.jpg', hits: (r) => (r <= 1 ? 2 : 1),            // HELYŐRZŐ
                     solid: (r, c) => r >= 1 && r <= 5 && c % 4 === 1
                 },
                 {
@@ -215,7 +215,7 @@
                     name: 'Cikcakk',
                     rows: 10, cols: 14,
                     colors: ['#f94144', '#f3722c', '#f8961e', '#f9c74f', '#90be6d', '#43aa8b', '#4d908e', '#577590', '#277da1', '#6a4c93'],
-                    image: 'temp_img/kep9.png', hits: (r) => (r % 4 === 0 ? 2 : 1),            // HELYŐRZŐ
+                    image: 'temp_img/kep9.jpg', hits: (r) => (r % 4 === 0 ? 2 : 1),            // HELYŐRZŐ
                     solid: (r, c) => (r === 4 || r === 5) && c % 5 === 0,
                     rowSpeed: (r) => [0.5, -0.8, 1.0, -0.6, 0.6, -0.6, 0.9, -1.1, 0.7, -0.5][r]
                 },
