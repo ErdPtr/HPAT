@@ -71,8 +71,37 @@
         }
         #levelButtons {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            width: 430px;
+            max-height: 520px;
+            overflow-y: auto;
+            padding: 4px 8px;
+            box-sizing: border-box;
+            grid-auto-rows: 38px;
+            align-content: start;
+        }
+        #levelButtons button {
+            min-width: 0;
+            padding: 9px 4px;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #overlay button.menuBtn {
+            font-size: 20px;
+            padding: 14px 20px;
+            min-width: 220px;
+        }
+        #overlay button.menuBtn#selectButton {
+            background: #3b6ea8;
+        }
+        #overlay button.menuBtn#selectButton:hover {
+            background: #335f91;
+        }
+        #backButton {
+            background: #666 !important;
         }
         #overlay.hidden {
             display: none;
@@ -89,8 +118,11 @@
     <div id="gameContainer">
         <canvas id="gameCanvas" width="480" height="700"></canvas>
         <div id="overlay">
-            <div id="overlayText">Válassz pályát!</div>
+            <div id="overlayText">Házi Project Atari</div>
+            <button id="playButton" class="menuBtn">▶ Játék</button>
+            <button id="selectButton" class="menuBtn">Pályaválasztó</button>
             <div id="levelButtons"></div>
+            <button id="backButton" style="display:none;">← Vissza</button>
             <button id="overlayButton" style="display:none;">Restart</button>
             <button id="overlayButton2" style="display:none;">Pályaválasztó</button>
         </div>
@@ -111,17 +143,24 @@
             const overlayButton = document.getElementById('overlayButton');
             const levelButtons = document.getElementById('levelButtons');
             const overlayButton2 = document.getElementById('overlayButton2');
+            const playButton = document.getElementById('playButton');
+            const selectButton = document.getElementById('selectButton');
+            const backButton = document.getElementById('backButton');
             const launchCheck = document.getElementById('launchCheck');
             launchCheck.addEventListener('change', () => launchCheck.blur());
+
             const WIDTH = canvas.width;
             const HEIGHT = canvas.height;
-            const BALL_SPEED = 5;         
+
+            // ================= BEÁLLÍTÁSOK =================
+            const BALL_SPEED = 5;          // px / frame (60 FPS-nél) – minden pályán ugyanaz
             const BALL_RADIUS = 6;
             const MAX_BALLS = 12;
-            const DROP_CHANCE = 0.12;      
+            const DROP_CHANCE = 0.12;      // 12% esély power-up-ra tégla törésekor
             const POWERUP_FALL_SPEED = 2.4;
-            const EFFECT_DURATION = 600;   
-            const LAUNCH_DELAY = 50;       
+            const EFFECT_DURATION = 600;   // frame (~10 mp)
+            const LAUNCH_DELAY = 50;       // kis szünet életvesztés / indulás után
+
             const basePaddleWidth = 75;
             const paddle = {
                 width: basePaddleWidth,
@@ -130,15 +169,29 @@
                 speed: 10
             };
             const paddleTop = HEIGHT - paddle.height - 5;
+
+            // --- Tégla-terület: ez a rész mindig teljesen lefedve indul ---
             const brickAreaX = 20;
             const brickAreaY = 40;
-            const brickAreaWidth = WIDTH - brickAreaX * 2;  
-            const brickAreaHeight = brickAreaWidth;        
+            const brickAreaWidth = WIDTH - brickAreaX * 2;   // 440
+            const brickAreaHeight = brickAreaWidth;          // négyzet alakú terület a képhez
             const brickGap = 6;
+
             let brickRowCount, brickColumnCount, brickWidth, brickHeight;
-            let rowOffsets = [];  
-            let rowSpeeds = [];    
-            let patrols = [];      
+            let rowOffsets = [];   // mozgó sorok eltolása (px)
+            let rowSpeeds = [];    // mozgó sorok sebessége (px / frame)
+            let patrols = [];      // mozgó, törhetetlen sávok a tégla-terület alatt
+            let colOffsets = [];   // mozgó oszlopok eltolása (px)
+            let colSpeeds = [];
+            let ghostClock = 0;    // szellem-téglák órája
+            let fx = [];           // robbanás-effektek
+            const GHOST_PERIOD = 240;  // ennyi frame-enként vált a szellem-fázis
+
+            // ================= KÉPEK =================
+            // Pályánként egy háttérkép, ami a téglák mögött bújik meg.
+            // Az 1-3. pálya képei megvannak, a 4-10. pályákhoz HELYŐRZŐK vannak:
+            // csak tedd be a megfelelő nevű fájlt a temp_img mappába
+            // (vagy írd át az útvonalat az alábbi 'image' mezőkben).
             function loadImage(src) {
                 const obj = { img: new Image(), loaded: false, src: src };
                 obj.img.onload = function () { obj.loaded = true; };
@@ -149,18 +202,26 @@
                 return obj;
             }
 
+            // ================= PÁLYÁK =================
+            // rows/cols      : téglák száma
+            // colors         : sorok színei
+            // image          : háttérkép útvonala (HELYŐRZŐ a 4-10. pályán)
+            // solid(r,c)     : (opcionális) true -> törhetetlen tégla (nem számít a pálya teljesítéséhez)
+            // hits(r,c)      : (opcionális) hány találat kell a tégla töréséhez (szám látszik rajta)
+            // rowSpeed(r)    : (opcionális) sor oldalirányú mozgása px/frame (körbefordul)
+            // patrols        : (opcionális) mozgó törhetetlen sávok a tégla-terület alatt
             const levels = [
                 {
                     name: 'Klasszikus',
                     rows: 4, cols: 7,
                     colors: ['#e63946', '#f4a261', '#e9c46a', '#2a9d8f'],
-                    image: 'temp_img/kep1.png'
+                    image: 'temp_img/kep1.jpg'
                 },
                 {
                     name: 'Sűrű',
                     rows: 6, cols: 10,
                     colors: ['#8e44ad', '#3498db', '#1abc9c', '#f1c40f', '#e67e22', '#16a085'],
-                    image: 'temp_img/kep2.jpg', hits: (r) => (r === 0 ? 2 : 1)
+                    image: 'temp_img/kep2.png', hits: (r) => (r === 0 ? 2 : 1)
                 },
                 {
                     name: 'Tömör',
@@ -172,7 +233,7 @@
                     name: 'Oszlopok',
                     rows: 8, cols: 11,
                     colors: ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#073b4b', '#ef476f', '#ffd166', '#06d6a0'],
-                    image: 'temp_img/kep4.jpg', hits: (r) => (r <= 1 ? 2 : 1),            // HELYŐRZŐ
+                    image: 'temp_img/kep4.png', hits: (r) => (r <= 1 ? 2 : 1),            // HELYŐRZŐ
                     solid: (r, c) => r >= 1 && r <= 5 && c % 4 === 1
                 },
                 {
@@ -195,6 +256,7 @@
                     colors: ['#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51', '#264653', '#2a9d8f', '#e9c46a', '#f4a261', '#e76f51'],
                     image: 'temp_img/kep7.png', hits: (r, c) => (r >= 4 && r <= 5 && c >= 4 && c <= 8 ? 3 : 1),            // HELYŐRZŐ
                     solid: (r, c) => {
+                        // üreges keret, alul 1 tégla nyílással (c = 6)
                         const frameH = (r === 3 || r === 6) && c >= 3 && c <= 9;
                         const frameV = (c === 3 || c === 9) && r >= 3 && r <= 6;
                         return (frameH || frameV) && !(r === 6 && c === 6);
@@ -215,7 +277,7 @@
                     name: 'Cikcakk',
                     rows: 10, cols: 14,
                     colors: ['#f94144', '#f3722c', '#f8961e', '#f9c74f', '#90be6d', '#43aa8b', '#4d908e', '#577590', '#277da1', '#6a4c93'],
-                    image: 'temp_img/kep9.jpg', hits: (r) => (r % 4 === 0 ? 2 : 1),            // HELYŐRZŐ
+                    image: 'temp_img/kep9.png', hits: (r) => (r % 4 === 0 ? 2 : 1),            // HELYŐRZŐ
                     solid: (r, c) => (r === 4 || r === 5) && c % 5 === 0,
                     rowSpeed: (r) => [0.5, -0.8, 1.0, -0.6, 0.6, -0.6, 0.9, -1.1, 0.7, -0.5][r]
                 },
@@ -231,7 +293,306 @@
                     ]
                 }
             ];
-            levels.forEach(l => { l.imageObj = loadImage(l.image); });
+            // ================= 11–50. PÁLYA =================
+            // Új tégla-típusok (a 'type(r,c)' függvényből):
+            //   'tnt'   – robbanó tégla: törésekor a környező téglákat is felrobbantja (láncreakció)
+            //   'gold'  – arany tégla: törésekor MINDIG power-up-ot ejt
+            //   'ghost' – szellem tégla: időnként eltűnik (átjárható), majd visszatér ('phase' = fázis)
+            // Új mozgások: colSpeed(c) – oszlopok függőleges körbefordulása;
+            // patrols: { x, y, w, h, vx, vy, minY, maxY } – vízszintesen/függőlegesen pattogó sávok.
+            const hsl = (h, s, l) => 'hsl(' + h + ',' + s + '%,' + l + '%)';
+            const spectrum = (n, h0, h1, s = 75, l = 55) =>
+                Array.from({ length: n }, (_, i) => hsl(Math.round(h0 + (h1 - h0) * i / Math.max(1, n - 1)), s, l));
+            const nx = (c, C) => (c - (C - 1) / 2) / (C / 2);
+            const ny = (r, R) => (r - (R - 1) / 2) / (R / 2);
+            const ringOf = (r, c, R, C) => Math.min(r, c, R - 1 - r, C - 1 - c);
+            const hash = (r, c, seed) => {
+                let h = (Math.imul(r + 1, 73856093) ^ Math.imul(c + 1, 19349663) ^ Math.imul(seed, 83492791)) >>> 0;
+                h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
+                return (h ^ (h >>> 15)) >>> 0;
+            };
+            // Kézzel rajzolt pálya: '#' törhetetlen, '1'-'9' találatszám, 'T' TNT, 'G' arany, 'g' szellem, '.' sima
+            function fromMap(name, map, o) {
+                return Object.assign({
+                    name, rows: map.length, cols: map[0].length,
+                    solid: (r, c) => map[r][c] === '#',
+                    hits: (r, c) => { const ch = map[r][c]; return ch >= '1' && ch <= '9' ? +ch : 1; },
+                    type: (r, c) => ({ T: 'tnt', G: 'gold', g: 'ghost' })[map[r][c]]
+                }, o);
+            }
+            const heart11 = (r, c) => {
+                const x = nx(c, 11) * 1.35, y = -ny(r, 11) * 1.35 + 0.2;
+                const a = x * x + y * y - 1;
+                return a * a * a - x * x * y * y * y <= 0;
+            };
+            const dist12 = (r, c) => Math.hypot(nx(c, 12), ny(r, 12));
+
+            levels.push(
+                // 11
+                { name: 'Szellemsakk', rows: 8, cols: 10, colors: spectrum(8, 170, 300),
+                  type: (r, c) => ((r + c) % 2 === 0 ? 'ghost' : undefined), phase: (r) => r % 2 },
+                // 12
+                { name: 'Dinamit', rows: 9, cols: 11, colors: spectrum(9, 0, 55, 85, 55),
+                  type: (r, c) => (r % 3 === 1 && (c % 4 === 1 || c % 4 === 2) ? 'tnt' : undefined) },
+                // 13
+                { name: 'Aranyláz', rows: 9, cols: 11, colors: spectrum(9, 35, 55, 90, 52),
+                  type: (r, c) => ((r + 2 * c) % 13 === 0 ? 'gold' : undefined),
+                  hits: (r) => (r < 2 ? 2 : 1), rowSpeed: (r) => (r % 2 ? 0.35 : -0.35) },
+                // 14
+                { name: 'Piramis', rows: 9, cols: 13, colors: spectrum(9, 20, 60, 80, 52),
+                  solid: (r, c) => r >= 1 && r <= 6 && (c === 6 - r || c === 6 + r),
+                  hits: (r, c) => (r <= 6 && Math.abs(c - 6) < r ? 2 : 1) },
+                // 15
+                { name: 'Gyűrűk', rows: 11, cols: 11, colors: spectrum(11, 190, 320),
+                  solid: (r, c) => {
+                      const k = ringOf(r, c, 11, 11);
+                      const gapV = c >= 4 && c <= 6, gapH = r >= 4 && r <= 6;
+                      return (k === 1 && !((r === 1 || r === 9) && gapV)) || (k === 3 && !((c === 3 || c === 7) && gapH));
+                  },
+                  type: (r, c) => (r === 5 && c === 5 ? 'gold' : undefined),
+                  hits: (r, c) => (ringOf(r, c, 11, 11) === 4 ? 2 : 1) },
+                // 16
+                { name: 'Lift', rows: 8, cols: 12, colors: spectrum(8, 80, 200),
+                  colSpeed: (c) => (c % 2 ? -0.6 : 0.6) * (1 + (c % 3) * 0.2),
+                  type: (r, c) => (r === 3 && c % 5 === 2 ? 'gold' : undefined),
+                  hits: (r) => (r === 7 ? 2 : 1) },
+                // 17
+                { name: 'Hullám', rows: 9, cols: 14, colors: spectrum(9, 195, 265),
+                  rowSpeed: (r) => Math.sin(r * 0.9 + 1) * 1.1,
+                  solid: (r, c) => r === 4 && c % 5 === 2 },
+                // 18
+                { name: 'Szív', rows: 11, cols: 11, colors: spectrum(11, 340, 370, 80, 55),
+                  hits: (r, c) => (heart11(r, c) ? 2 : 1),
+                  type: (r, c) => (r === 4 && (c === 3 || c === 7) ? 'gold' : undefined) },
+                // 19
+                { name: 'Kerítés', rows: 8, cols: 12, colors: spectrum(8, 20, 200, 70, 55),
+                  solid: (r, c) => r >= 2 && r <= 5 && c % 3 === 1,
+                  patrols: [{ x: 60, y: 540, w: 80, vx: 1.8 }] },
+                // 20
+                { name: 'Bombázó', rows: 10, cols: 12, colors: spectrum(10, 0, 40, 85, 50),
+                  type: (r, c) => (r % 4 === 1 && (c % 4 === 1 || c % 4 === 2) ? 'tnt' : undefined),
+                  hits: (r) => (r === 0 ? 2 : 1),
+                  patrols: [{ x: 200, y: 505, w: 14, h: 90, vx: 1.5, vy: 0.9, minY: 500, maxY: 580 }] },
+                // 21
+                { name: 'Villanás', rows: 9, cols: 12, colors: spectrum(9, 260, 330),
+                  type: (r, c) => (c % 2 === 0 ? 'ghost' : undefined), phase: (r, c) => (c >> 1) % 2,
+                  rowSpeed: (r) => (r % 2 ? 0.4 : -0.4) },
+                // 22
+                { name: 'Kereszt', rows: 11, cols: 11, colors: spectrum(11, 140, 260),
+                  solid: (r, c) => (r === 5 && c >= 1 && c <= 9 && c !== 5 && c !== 4) || (c === 5 && r >= 1 && r <= 9 && r !== 5),
+                  type: (r, c) => (r === 5 && c === 5 ? 'gold' : undefined),
+                  hits: (r, c) => (Math.abs(r - 5) <= 2 && Math.abs(c - 5) <= 2 ? 2 : 1) },
+                // 23
+                { name: 'Kígyó', rows: 10, cols: 13, colors: spectrum(10, 120, 330, 70, 52),
+                  solid: (r, c) => (r === 2 && c <= 11) || (r === 5 && c >= 1) || (r === 8 && c <= 11),
+                  hits: (r) => (r === 0 ? 2 : 1) },
+                // 24
+                { name: 'Pásztázó', rows: 8, cols: 11, colors: spectrum(8, 300, 380),
+                  type: (r, c) => (r === 0 && c % 5 === 2 ? 'gold' : undefined),
+                  hits: (r) => (r < 2 ? 2 : 1),
+                  patrols: [
+                      { x: 30, y: 495, w: 120, vx: 1.2, vy: 1.0, minY: 490, maxY: 620 },
+                      { x: 330, y: 620, w: 100, vx: -1.5, vy: -1.1, minY: 490, maxY: 620 }
+                  ] },
+                // 25
+                { name: 'Sakktábla', rows: 12, cols: 12, colors: ['#ecf0f1', '#34495e'],
+                  solid: (r, c) => (r < 2 || r > 9) && (c < 2 || c > 9),
+                  type: (r, c) => ((r === 5 || r === 6) && (c === 5 || c === 6) ? 'tnt' : undefined),
+                  hits: (r, c) => ((r + c) % 2 ? 2 : 1) },
+                // 26
+                { name: 'Labirintus', rows: 12, cols: 14, colors: spectrum(12, 40, 200),
+                  solid: (r, c) => (r === 3 && c >= 3) || (r === 6 && c <= 10) || (r === 9 && c >= 3),
+                  hits: (r) => (r === 0 || r === 11 ? 2 : 1) },
+                // 27
+                { name: 'Turbina', rows: 10, cols: 10, colors: spectrum(10, 10, 70),
+                  rowSpeed: (r) => (r % 2 ? 1 : -1) * (0.5 + r * 0.1),
+                  solid: (r, c) => r === 4 && c % 3 === 0,
+                  hits: (r, c) => ((r + c) % 5 === 0 ? 2 : 1) },
+                // 28
+                { name: 'Tölcsér', rows: 11, cols: 11, colors: spectrum(11, 200, 280),
+                  solid: (r, c) => r >= 2 && r <= 6 && (c === r - 2 || c === 12 - r),
+                  hits: (r, c) => (r >= 3 && r <= 6 && c > r - 2 && c < 12 - r ? 2 : 1),
+                  type: (r, c) => (r === 8 && c === 5 ? 'gold' : undefined) },
+                // 29
+                { name: 'Céltábla', rows: 12, cols: 12, colors: spectrum(12, 0, 60),
+                  solid: (r, c) => dist12(r, c) > 1.08,
+                  type: (r, c) => { const v = dist12(r, c); return v < 0.25 ? 'gold' : (v > 0.5 && v < 0.68 ? 'tnt' : undefined); },
+                  hits: (r, c) => (dist12(r, c) < 0.45 ? 2 : 1) },
+                // 30
+                { name: 'Mérföldkő', rows: 12, cols: 15, colors: spectrum(12, 260, 340),
+                  solid: (r, c) => (r === 5 || r === 6) && (c === 3 || c === 11),
+                  type: (r, c) => (ringOf(r, c, 12, 15) === 0 ? 'ghost' : ((r === 5 || r === 6) && c === 7 ? 'gold' : undefined)),
+                  hits: (r, c) => { const k = ringOf(r, c, 12, 15); return k >= 3 ? 3 : (k >= 1 ? 2 : 1); },
+                  rowSpeed: (r) => (r % 2 ? 0.5 : -0.5),
+                  patrols: [{ x: 140, y: 540, w: 100, vx: 2.0 }] },
+                // 31
+                { name: 'Szivárvány', rows: 10, cols: 12, colors: spectrum(10, 0, 300, 80, 55),
+                  colSpeed: (c) => [0.7, 0.7, 0.7, -0.7, -0.7, -0.7, 0.7, 0.7, 0.7, -0.7, -0.7, -0.7][c],
+                  hits: (r) => (r % 3 === 2 ? 2 : 1),
+                  type: (r, c) => (r === 9 && c % 4 === 1 ? 'gold' : undefined) },
+                // 32
+                { name: 'Tüskék', rows: 10, cols: 13, colors: spectrum(10, 300, 360, 70, 52),
+                  solid: (r, c) => r % 2 === 1 && c % 2 === 1 && r < 9,
+                  rowSpeed: (r) => (r % 2 ? (r % 4 === 1 ? 0.8 : -0.8) : 0),
+                  hits: (r) => (r === 0 ? 2 : 1) },
+                // 33
+                { name: 'Diagonális', rows: 11, cols: 11, colors: spectrum(11, 160, 240),
+                  solid: (r, c) => c - r === 3,
+                  type: (r, c) => (r - c === 3 ? 'ghost' : undefined),
+                  hits: (r, c) => ((r + c) % 4 === 0 ? 2 : 1) },
+                // 34
+                { name: 'Kapuk', rows: 10, cols: 13, colors: spectrum(10, 30, 170),
+                  solid: (r, c) => (r === 4 && c !== 2 && c !== 6 && c !== 10) || (r === 6 && c !== 4 && c !== 8),
+                  type: (r, c) => ((r === 4 && (c === 2 || c === 6 || c === 10)) || (r === 6 && (c === 4 || c === 8)) ? 'ghost' : undefined),
+                  phase: (r) => (r === 4 ? 0 : 1),
+                  hits: (r) => (r === 5 ? 2 : 1) },
+                // 35
+                { name: 'Káosz', rows: 12, cols: 12, colors: spectrum(12, 0, 330, 70, 55),
+                  solid: (r, c) => hash(r, c, 1) % 11 === 0,
+                  type: (r, c) => { const h = hash(r, c, 2) % 23; return h === 0 ? 'tnt' : (h === 1 ? 'gold' : (h === 2 ? 'ghost' : undefined)); },
+                  hits: (r, c) => (hash(r, c, 3) % 5 === 0 ? 2 : 1) },
+                // 36
+                { name: 'Csiga', rows: 13, cols: 13, colors: spectrum(13, 250, 360),
+                  solid: (r, c) => {
+                      const k = ringOf(r, c, 13, 13);
+                      const g = r >= 5 && r <= 7, h = c >= 5 && c <= 7;
+                      return (k === 1 && !((c === 1 || c === 11) && g)) || (k === 3 && !((r === 3 || r === 9) && h));
+                  },
+                  type: (r, c) => (r === 6 && c === 6 ? 'gold' : undefined),
+                  hits: (r, c) => (ringOf(r, c, 13, 13) === 4 ? 2 : 1) },
+                // 37
+                { name: 'Mozgó falak', rows: 9, cols: 14, colors: spectrum(9, 180, 60),
+                  solid: (r, c) => (r === 3 || r === 5) && c % 2 === 0,
+                  rowSpeed: (r) => (r === 3 ? 1.2 : (r === 5 ? -1.2 : (r % 2 ? 0.4 : -0.4))),
+                  type: (r) => (r === 0 ? 'ghost' : undefined) },
+                // 38
+                { name: 'Kaszkád', rows: 11, cols: 14, colors: spectrum(11, 100, 200),
+                  colSpeed: (c) => [0.5, -0.7, 0.9, -0.4, 0.6, -0.9, 0.5, -0.5, 0.8, -0.6, 0.4, -0.8, 0.7, -0.5][c],
+                  type: (r, c) => (r % 5 === 2 && (c % 5 === 1 || c % 5 === 2) ? 'tnt' : undefined),
+                  hits: (r) => (r === 0 ? 2 : 1) },
+                // 39
+                { name: 'Vártorony', rows: 13, cols: 11, colors: spectrum(13, 25, 45, 40, 50),
+                  solid: (r, c) => (r === 0 && c % 2 === 0) || ((c === 0 || c === 10) && r >= 2 && r <= 10),
+                  hits: (r, c) => (r >= 3 && r <= 9 && c >= 2 && c <= 8 ? 2 : 1),
+                  type: (r, c) => (r === 6 && c === 5 ? 'gold' : undefined) },
+                // 40
+                { name: 'Láncreakció', rows: 12, cols: 12, colors: spectrum(12, 0, 50),
+                  type: (r, c) => (r === 5 || c === 5 ? 'tnt' : undefined),
+                  hits: (r, c) => (r === 5 || c === 5 ? 2 : 1),
+                  solid: (r, c) => r % 5 === 2 && c % 5 === 2 },
+                // 41
+                { name: 'Szellemváros', rows: 12, cols: 13, colors: spectrum(12, 200, 300),
+                  type: (r, c) => (ringOf(r, c, 12, 13) % 2 === 0 ? 'ghost' : undefined),
+                  phase: (r, c) => (ringOf(r, c, 12, 13) >> 1) % 2,
+                  hits: (r, c) => (ringOf(r, c, 12, 13) >= 4 ? 2 : 1),
+                  patrols: [{ x: 150, y: 540, w: 90, vx: 1.7 }] },
+                // 42
+                { name: 'Szélmalom', rows: 12, cols: 12, colors: spectrum(12, 300, 160),
+                  solid: (r, c) => (r === 2 && c >= 2 && c <= 7) || (c === 9 && r >= 2 && r <= 7) ||
+                                   (r === 9 && c >= 4 && c <= 9) || (c === 2 && r >= 4 && r <= 9),
+                  type: (r, c) => ((r === 5 || r === 6) && (c === 5 || c === 6) ? 'gold' : undefined),
+                  hits: (r, c) => ((r === 5 || r === 6) && (c === 5 || c === 6) ? 3 : 1) },
+                // 43
+                { name: 'Zsilip', rows: 10, cols: 14, colors: spectrum(10, 190, 230),
+                  rowSpeed: (r) => ((r >> 1) % 2 ? 1 : -1) * (0.6 + 0.15 * (r >> 1)),
+                  solid: (r, c) => c % 7 === 0 && r % 3 === 1,
+                  hits: (r) => (r >= 8 ? 2 : 1),
+                  type: (r, c) => (r === 4 && c === 6 ? 'gold' : undefined) },
+                // 44
+                { name: 'Hold', rows: 12, cols: 12, colors: spectrum(12, 45, 60, 60, 60),
+                  solid: (r, c) => { const v = dist12(r, c); return v >= 0.72 && v <= 0.9 && !(r >= 9 && Math.abs(c - 5.5) <= 2.2); },
+                  type: (r, c) => (dist12(r, c) < 0.2 ? 'gold' : undefined),
+                  hits: (r, c) => (dist12(r, c) < 0.72 ? 2 : 1) },
+                // 45
+                { name: 'Pókháló', rows: 13, cols: 13, colors: spectrum(13, 270, 330, 30, 60),
+                  solid: (r, c) => ringOf(r, c, 13, 13) >= 1 && Math.hypot(r - 6, c - 6) > 1.5 && (r === 6 || c === 6 || r === c || r + c === 12),
+                  type: (r, c) => (Math.hypot(r - 6, c - 6) <= 1.5 ? 'tnt' : undefined),
+                  hits: (r, c) => (ringOf(r, c, 13, 13) === 1 ? 2 : 1) },
+                // 46
+                fromMap('Űrhajó', [
+                    '......#......',
+                    '.....222.....',
+                    '.....232.....',
+                    '....22222....',
+                    '....23G32....',
+                    '....22222....',
+                    '....23332....',
+                    '...#22222#...',
+                    '..##22222##..',
+                    '.###.222.###.',
+                    '###..2T2..###',
+                    '#....TTT....#',
+                    '.....TTT.....'
+                ], { colors: spectrum(13, 200, 260) }),
+                // 47
+                fromMap('Kastély', [
+                    '#.#.#.#.#.#.#.#',
+                    '222222222222222',
+                    '2.....222.....2',
+                    '2.....2G2.....2',
+                    '2..#..222..#..2',
+                    '2..#..2.2..#..2',
+                    '222222222222222',
+                    '2TT.2.....2.TT2',
+                    '2TT.2.....2.TT2',
+                    '2...2..G..2...2',
+                    '2...2.....2...2',
+                    '####.......####'
+                ], { colors: spectrum(12, 25, 50, 35, 52) }),
+                // 48
+                fromMap('Mosoly', [
+                    '...3333333...',
+                    '..3.......3..',
+                    '.3..G...G..3.',
+                    '.3..G...G..3.',
+                    '3....T.T....3',
+                    '3...........3',
+                    '3...........3',
+                    '3.#.......#.3',
+                    '.3.#.....#.3.',
+                    '.3..#####..3.',
+                    '..3.......3..',
+                    '...3333333...'
+                ], { colors: spectrum(12, 45, 60, 90, 55) }),
+                // 49
+                { name: 'Végjáték', rows: 14, cols: 15, colors: spectrum(14, 0, 300, 70, 52),
+                  solid: (r, c) => { const k = ringOf(r, c, 14, 15); return (k === 3 && (r + c) % 4 !== 0) || (r === 7 && c % 4 === 2 && k >= 4); },
+                  type: (r, c) => {
+                      const k = ringOf(r, c, 14, 15);
+                      if (k === 0) return 'ghost';
+                      if (k >= 4 && (r + c) % 5 === 0) return 'tnt';
+                      if (k === 6 && c === 7) return 'gold';
+                      return undefined;
+                  },
+                  phase: (r, c) => (r + c) % 2,
+                  hits: (r, c) => { const k = ringOf(r, c, 14, 15); return k >= 4 ? 3 : (k >= 1 ? 2 : 1); },
+                  rowSpeed: (r) => (r % 3 === 0 ? (r % 2 ? 0.6 : -0.6) : 0),
+                  patrols: [
+                      { x: 60, y: 530, w: 90, vx: 1.9 },
+                      { x: 330, y: 590, w: 80, vx: -2.2, vy: 0.6, minY: 520, maxY: 610 }
+                  ] },
+                // 50
+                { name: 'A Nagy Finálé', rows: 14, cols: 16, colors: spectrum(14, 0, 340, 85, 55),
+                  solid: (r, c) => { const k = ringOf(r, c, 14, 16); return (k === 2 && (r + c) % 3 !== 0) || (k === 4 && (r * 2 + c) % 5 !== 0); },
+                  type: (r, c) => {
+                      const k = ringOf(r, c, 14, 16);
+                      if (k === 0 && (r + c) % 2 === 0) return 'ghost';
+                      if (k === 3 && (r + c) % 4 === 1) return 'tnt';
+                      if (k >= 5 && (r + c) % 3 === 0) return 'gold';
+                      return undefined;
+                  },
+                  phase: (r, c) => ringOf(r, c, 14, 16) % 2,
+                  hits: (r, c) => { const k = ringOf(r, c, 14, 16); return k <= 1 ? 1 : (k < 4 ? 2 : 3); },
+                  rowSpeed: (r) => (r % 2 ? 1 : -1) * (0.3 + 0.07 * r),
+                  patrols: [
+                      { x: 40, y: 520, w: 100, vx: 2.0 },
+                      { x: 340, y: 570, w: 90, vx: -2.4 },
+                      { x: 220, y: 500, w: 14, h: 80, vx: 1.2, vy: 1.1, minY: 495, maxY: 600 }
+                  ] }
+            );
+            levels.forEach((l, i) => { if (!l.image) l.image = 'temp_img/kep' + (i + 1) + '.png'; });
+
+            // ================= POWER-UPOK =================
             const POWERUPS = {
                 slow:  { label: 'S', color: '#3498db', text: 'Lassú labda',          weight: 20 },
                 fast:  { label: 'F', color: '#e74c3c', text: 'Gyors labda',          weight: 15 },
@@ -242,6 +603,7 @@
             };
             const POWERUP_KEYS = Object.keys(POWERUPS);
             const POWERUP_TOTAL_WEIGHT = POWERUP_KEYS.reduce((s, k) => s + POWERUPS[k].weight, 0);
+
             function randomPowerUpType() {
                 let roll = Math.random() * POWERUP_TOTAL_WEIGHT;
                 for (const k of POWERUP_KEYS) {
@@ -250,6 +612,8 @@
                 }
                 return POWERUP_KEYS[0];
             }
+
+            // ================= ÁLLAPOT =================
             let balls = [];
             let bricks = [];
             let powerUps = [];
@@ -265,14 +629,20 @@
             let combo = 0;
             let paused = false;
             const comboMultiplier = () => Math.min(1 + Math.floor(combo / 5), 8);
+
             let speedFactor = 1;
             let speedTimer = 0;
             let wideTimer = 0;
             let toast = { text: '', timer: 0 };
+
+            // ================= SEGÉDFÜGGVÉNYEK =================
             const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
             function makeBall(x, y, angleFromVertical) {
+                // vx, vy egységvektor; a tényleges sebességet a BALL_SPEED * speedFactor adja
                 return { x, y, vx: Math.sin(angleFromVertical), vy: -Math.cos(angleFromVertical), dead: false };
             }
+
             function rotateBall(ball, delta) {
                 const cos = Math.cos(delta), sin = Math.sin(delta);
                 const nvx = ball.vx * cos - ball.vy * sin;
@@ -281,6 +651,8 @@
                 ball.vy = nvy;
                 keepBallAngleSane(ball);
             }
+
+            // Ne lehessen a labda "végtelenül" vízszintes
             function keepBallAngleSane(ball) {
                 const minVy = 0.2;
                 if (Math.abs(ball.vy) < minVy) {
@@ -290,15 +662,19 @@
                 ball.vx /= len;
                 ball.vy /= len;
             }
+
             function setPaddleWidth(newWidth) {
                 const center = paddle.x + paddle.width / 2;
                 paddle.width = newWidth;
                 paddle.x = clamp(center - newWidth / 2, 0, WIDTH - newWidth);
             }
+
             function showToast(text) {
                 toast.text = text;
                 toast.timer = 100;
             }
+
+            // ================= PÁLYA FELÉPÍTÉSE =================
             function computeBrickGeometry(levelIndex) {
                 const level = levels[levelIndex];
                 brickRowCount = level.rows;
@@ -314,15 +690,24 @@
                 for (let c = 0; c < brickColumnCount; c++) {
                     bricks[c] = [];
                     for (let r = 0; r < brickRowCount; r++) {
+                        const isSolid = !!(level.solid && level.solid(r, c));
+                        const h = level.hits ? level.hits(r, c) : 1;
                         bricks[c][r] = {
                             status: 1,
-                            solid: !!(level.solid && level.solid(r, c)),
-                            hits: level.hits ? level.hits(r, c) : 1,
-                            maxHits: level.hits ? level.hits(r, c) : 1,
+                            c, r,
+                            solid: isSolid,
+                            type: isSolid || !level.type ? undefined : level.type(r, c),
+                            phase: level.phase ? level.phase(r, c) : 0,
+                            hits: h,
+                            maxHits: h,
                             color: level.colors[r % level.colors.length]
                         };
                     }
                 }
+
+                // Biztonsági ellenőrzés: minden törhető tégla elérhető legyen.
+                // Ami teljesen el van zárva törhetetlen téglák mögé, azt törhetetlenné tesszük,
+                // így a pálya mindig teljesíthető marad.
                 const reachable = [];
                 for (let c = 0; c < brickColumnCount; c++) reachable[c] = new Array(brickRowCount).fill(false);
                 const queue = [];
@@ -356,21 +741,51 @@
                 for (let r = 0; r < brickRowCount; r++) {
                     rowSpeeds[r] = level.rowSpeed ? level.rowSpeed(r) : 0;
                 }
-                patrols = (level.patrols || []).map(p => ({ x: p.x, y: p.y, w: p.w, h: 12, vx: p.vx }));
+                colOffsets = new Array(brickColumnCount).fill(0);
+                colSpeeds = [];
+                for (let c = 0; c < brickColumnCount; c++) {
+                    colSpeeds[c] = level.colSpeed ? level.colSpeed(c) : 0;
+                }
+                ghostClock = 0;
+                fx = [];
+                patrols = (level.patrols || []).map(p => ({
+                    x: p.x, y: p.y, w: p.w, h: p.h || 12,
+                    vx: p.vx || 0, vy: p.vy || 0,
+                    minY: p.minY !== undefined ? p.minY : p.y,
+                    maxY: p.maxY !== undefined ? p.maxY : p.y
+                }));
             }
+
+            // Egy tégla "téglalapjai": mozgó sor/oszlop esetén körbefordul, ezért akár több darab is lehet.
+            // A téglalapokat a tégla-területre vágjuk.
             function brickRects(c, r) {
                 const cw = brickWidth + brickGap;
+                const ch = brickHeight + brickGap;
                 const totalW = brickColumnCount * cw;
+                const totalH = brickRowCount * ch;
                 const x = (((c * cw + rowOffsets[r]) % totalW) + totalW) % totalW;
-                const y = brickAreaY + r * (brickHeight + brickGap);
+                const y = (((r * ch + colOffsets[c]) % totalH) + totalH) % totalH;
+                const xs = x + brickWidth > brickAreaWidth ? [x, x - totalW] : [x];
+                const ys = y + brickHeight > brickAreaHeight ? [y, y - totalH] : [y];
                 const out = [];
-                [x, x - totalW].forEach(px => {
+                for (const px of xs) {
                     const left = Math.max(px + brickAreaX, brickAreaX);
                     const right = Math.min(px + brickAreaX + brickWidth, brickAreaX + brickAreaWidth);
-                    if (right > left + 0.5) out.push({ l: left, r: right, t: y, b: y + brickHeight });
-                });
+                    if (right <= left + 0.5) continue;
+                    for (const py of ys) {
+                        const top = Math.max(py + brickAreaY, brickAreaY);
+                        const bottom = Math.min(py + brickAreaY + brickHeight, brickAreaY + brickAreaHeight);
+                        if (bottom > top + 0.5) out.push({ l: left, r: right, t: top, b: bottom });
+                    }
+                }
                 return out;
             }
+
+            // Szellem-tégla: éppen szilárd-e?
+            function ghostSolid(b) {
+                return (Math.floor(ghostClock / GHOST_PERIOD) + b.phase) % 2 === 0;
+            }
+
             function bricksRemaining() {
                 let count = 0;
                 for (let c = 0; c < brickColumnCount; c++) {
@@ -381,12 +796,14 @@
                 }
                 return count;
             }
+
             function resetEffects() {
                 speedFactor = 1;
                 speedTimer = 0;
                 wideTimer = 0;
                 setPaddleWidth(basePaddleWidth);
             }
+
             function resetBallAndPaddle() {
                 resetEffects();
                 powerUps = [];
@@ -396,8 +813,10 @@
                 combo = 0;
                 launchTimer = launchCheck.checked ? Infinity : LAUNCH_DELAY;
             }
+
             function startLevel(levelIndex, carry) {
                 currentLevel = levelIndex;
+                if (!levels[levelIndex].imageObj) levels[levelIndex].imageObj = loadImage(levels[levelIndex].image);
                 buildBricks(currentLevel);
                 resetBallAndPaddle();
                 levelDisplay.textContent = currentLevel + 1;
@@ -408,6 +827,9 @@
                 scoreDisplay.textContent = score;
                 livesDisplay.textContent = lives;
             }
+
+            // ================= ÜTKÖZÉS =================
+            // Kör - téglalap ütközés. Visszatér: true, ha ütközött (és a labdát kitolja/visszaveri).
             function hitRect(ball, l, t, r, b) {
                 const R = BALL_RADIUS;
                 const cx = clamp(ball.x, l, r);
@@ -417,6 +839,7 @@
                 if (dx * dx + dy * dy >= R * R) return false;
 
                 if (dx === 0 && dy === 0) {
+                    // a labda közepe a téglán belül van – a legkisebb behatolás szerint
                     const ol = ball.x - l, or = r - ball.x, ot = ball.y - t, ob = b - ball.y;
                     const m = Math.min(ol, or, ot, ob);
                     if (m === ol) { ball.x = l - R; ball.vx = -Math.abs(ball.vx); }
@@ -439,25 +862,57 @@
                 score += 10 * comboMultiplier();
                 scoreDisplay.textContent = score;
                 b.hits--;
-                if (b.hits <= 0) destroyBrick(b, rect);
+                if (b.hits <= 0) destroyBrick(b);
             }
-            function destroyBrick(b, rect) {
-                b.status = 0;
 
-                if (Math.random() < DROP_CHANCE) {
-                    powerUps.push({
-                        x: (rect.l + rect.r) / 2,
-                        y: (rect.t + rect.b) / 2,
-                        type: randomPowerUpType()
-                    });
+            function brickCenter(b) {
+                const rects = brickRects(b.c, b.r);
+                if (rects.length) {
+                    const rc = rects[0];
+                    return { x: (rc.l + rc.r) / 2, y: (rc.t + rc.b) / 2 };
                 }
+                return { x: brickAreaX + brickAreaWidth / 2, y: brickAreaY + brickAreaHeight / 2 };
+            }
+
+            function killBrick(b, queue) {
+                b.status = 0;
+                const pos = brickCenter(b);
+                if (b.type === 'gold' || Math.random() < DROP_CHANCE) {
+                    powerUps.push({ x: pos.x, y: pos.y, type: randomPowerUpType() });
+                }
+                if (b.type === 'tnt') queue.push({ b, x: pos.x, y: pos.y });
+            }
+
+            function destroyBrick(b) {
+                const queue = [];
+                killBrick(b, queue);
+                // TNT láncreakció: a közvetlen környezetben (geometriailag) lévő törhető téglák is elpusztulnak
+                const reach = Math.max(brickWidth, brickHeight) + brickGap + 2;
+                while (queue.length) {
+                    const t = queue.shift();
+                    fx.push({ x: t.x, y: t.y, t: 0, r: reach * 1.5 });
+                    for (let c = 0; c < brickColumnCount; c++) {
+                        for (let r = 0; r < brickRowCount; r++) {
+                            const nb = bricks[c][r];
+                            if (nb.status !== 1 || nb.solid) continue;
+                            const pos = brickCenter(nb);
+                            if (Math.abs(pos.x - t.x) <= reach && Math.abs(pos.y - t.y) <= reach) {
+                                score += 10;
+                                killBrick(nb, queue);
+                            }
+                        }
+                    }
+                }
+                scoreDisplay.textContent = score;
                 if (bricksRemaining() === 0) handleLevelClear();
             }
+
             function brickCollision(ball) {
                 for (let c = 0; c < brickColumnCount; c++) {
                     for (let r = 0; r < brickRowCount; r++) {
                         const b = bricks[c][r];
                         if (b.status !== 1) continue;
+                        if (b.type === 'ghost' && !b.solid && !ghostSolid(b)) continue; // átjárható fázis
                         const rects = brickRects(c, r);
                         for (const rect of rects) {
                             if (hitRect(ball, rect.l, rect.t, rect.r, rect.b)) {
@@ -479,9 +934,13 @@
                 for (let i = 0; i < n; i++) {
                     ball.x += ball.vx * s;
                     ball.y += ball.vy * s;
+
+                    // Falak
                     if (ball.x < R) { ball.x = R; ball.vx = Math.abs(ball.vx); }
                     else if (ball.x > WIDTH - R) { ball.x = WIDTH - R; ball.vx = -Math.abs(ball.vx); }
                     if (ball.y < R) { ball.y = R; ball.vy = Math.abs(ball.vy); keepBallAngleSane(ball); }
+
+                    // Ütő
                     if (ball.vy > 0 &&
                         ball.y + R >= paddleTop && ball.y < paddleTop + paddle.height &&
                         ball.x >= paddle.x - R * 0.5 && ball.x <= paddle.x + paddle.width + R * 0.5) {
@@ -492,17 +951,25 @@
                         ball.y = paddleTop - R;
                         combo = 0;
                     }
+
+                    // Mozgó törhetetlen sávok
                     for (const p of patrols) {
                         hitRect(ball, p.x, p.y, p.x + p.w, p.y + p.h);
                     }
+
+                    // Téglák
                     brickCollision(ball);
                     if (!gameRunning) return;
+
+                    // Elesett
                     if (ball.y - R > HEIGHT) {
                         ball.dead = true;
                         return;
                     }
                 }
             }
+
+            // ================= POWER-UP HATÁSOK =================
             function applyPowerUp(type) {
                 showToast(POWERUPS[type].text);
                 switch (type) {
@@ -515,6 +982,7 @@
                         speedTimer = EFFECT_DURATION;
                         break;
                     case 'multi': {
+                        // 2 extra labda az ütő közepéről
                         const px = paddle.x + paddle.width / 2;
                         [-0.35, 0.35].forEach(a => {
                             if (balls.length < MAX_BALLS) balls.push(makeBall(px, paddleTop - BALL_RADIUS, a));
@@ -522,6 +990,7 @@
                         break;
                     }
                     case 'split': {
+                        // minden meglévő labdából még egy
                         const snapshot = balls.slice();
                         snapshot.forEach((b, i) => {
                             if (balls.length >= MAX_BALLS) return;
@@ -541,6 +1010,8 @@
                         break;
                 }
             }
+
+            // ================= RAJZOLÁS =================
             function drawBackgroundImage() {
                 const levelImage = levels[currentLevel].imageObj;
                 ctx.save();
@@ -550,6 +1021,7 @@
                 if (levelImage && levelImage.loaded) {
                     ctx.drawImage(levelImage.img, brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
                 } else {
+                    // Helyőrző, amíg nincs meg a kép
                     ctx.fillStyle = '#333';
                     ctx.fillRect(brickAreaX, brickAreaY, brickAreaWidth, brickAreaHeight);
                     ctx.fillStyle = '#777';
@@ -560,6 +1032,7 @@
                 }
                 ctx.restore();
             }
+
             function drawSolidBrick(l, t, w, h) {
                 ctx.fillStyle = '#7f8c8d';
                 ctx.fillRect(l, t, w, h);
@@ -571,6 +1044,7 @@
                 ctx.moveTo(l + w - 2, t + 2); ctx.lineTo(l + 2, t + h - 2);
                 ctx.stroke();
             }
+
             function drawBricks() {
                 ctx.save();
                 ctx.beginPath();
@@ -584,8 +1058,40 @@
                             if (b.solid) {
                                 drawSolidBrick(rect.l, rect.t, rect.r - rect.l, rect.b - rect.t);
                             } else {
-                                ctx.fillStyle = b.color;
-                                ctx.fillRect(rect.l, rect.t, rect.r - rect.l, rect.b - rect.t);
+                                const bw = rect.r - rect.l, bh = rect.b - rect.t;
+                                let alpha = 1;
+                                if (b.type === 'ghost') {
+                                    const tt = ghostClock % GHOST_PERIOD;
+                                    const nearSwitch = tt > GHOST_PERIOD - 45;
+                                    const flicker = 0.5 + 0.5 * Math.sin(ghostClock * 0.5);
+                                    if (ghostSolid(b)) alpha = nearSwitch ? 0.35 + 0.55 * flicker : 0.9;
+                                    else alpha = nearSwitch ? 0.12 + 0.3 * flicker : 0.1;
+                                }
+                                ctx.globalAlpha = alpha;
+                                ctx.fillStyle = b.type === 'gold' ? '#f1c40f' : (b.type === 'tnt' ? '#c0392b' : b.color);
+                                ctx.fillRect(rect.l, rect.t, bw, bh);
+                                if (b.type === 'ghost') {
+                                    ctx.save();
+                                    ctx.setLineDash([3, 2]);
+                                    ctx.lineWidth = 1;
+                                    ctx.strokeStyle = '#fff';
+                                    ctx.strokeRect(rect.l + 0.5, rect.t + 0.5, bw - 1, bh - 1);
+                                    ctx.restore();
+                                } else if (b.type === 'gold') {
+                                    ctx.lineWidth = 1.5;
+                                    ctx.strokeStyle = '#fff6b0';
+                                    ctx.strokeRect(rect.l + 1, rect.t + 1, bw - 2, bh - 2);
+                                } else if (b.type === 'tnt') {
+                                    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+                                    ctx.fillRect(rect.l, rect.t + bh * 0.35, bw, bh * 0.3);
+                                }
+                                if (b.maxHits === 1 && (b.type === 'gold' || b.type === 'tnt') && bw > 12) {
+                                    ctx.font = 'bold ' + Math.min(13, Math.floor(bh * 0.6)) + 'px Arial';
+                                    ctx.textAlign = 'center';
+                                    ctx.textBaseline = 'middle';
+                                    ctx.fillStyle = '#fff';
+                                    ctx.fillText(b.type === 'gold' ? '★' : (bw >= 22 ? 'TNT' : '!'), (rect.l + rect.r) / 2, (rect.t + rect.b) / 2 + 1);
+                                }
                                 if (b.maxHits > 1 && rect.r - rect.l > 14) {
                                     ctx.font = 'bold ' + Math.min(15, Math.floor(brickHeight * 0.7)) + 'px Arial';
                                     ctx.textAlign = 'center';
@@ -596,15 +1102,31 @@
                                     ctx.fillStyle = '#fff';
                                     ctx.fillText(b.hits, (rect.l + rect.r) / 2, (rect.t + rect.b) / 2 + 1);
                                 }
+                                ctx.globalAlpha = 1;
                             }
                         });
                     }
                 }
                 ctx.restore();
             }
+
+            function drawFx() {
+                fx.forEach(e => {
+                    const k = e.t / 22;
+                    ctx.beginPath();
+                    ctx.arc(e.x, e.y, 6 + e.r * k, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255,170,40,' + (0.5 * (1 - k)) + ')';
+                    ctx.fill();
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = 'rgba(255,240,150,' + (1 - k) + ')';
+                    ctx.stroke();
+                });
+            }
+
             function drawPatrols() {
                 patrols.forEach(p => drawSolidBrick(p.x, p.y, p.w, p.h));
             }
+
             function drawPowerUps() {
                 powerUps.forEach(p => {
                     const def = POWERUPS[p.type];
@@ -623,6 +1145,7 @@
                     ctx.textBaseline = 'alphabetic';
                 });
             }
+
             function drawBalls() {
                 balls.forEach(ball => {
                     ctx.beginPath();
@@ -632,10 +1155,12 @@
                     ctx.closePath();
                 });
             }
+
             function drawPaddle() {
                 ctx.fillStyle = '#00bcd4';
                 ctx.fillRect(paddle.x, paddleTop, paddle.width, paddle.height);
             }
+
             function drawStatus() {
                 ctx.font = '13px Arial';
                 ctx.textAlign = 'left';
@@ -661,6 +1186,7 @@
                     ctx.fillText(toast.text, brickAreaX + brickAreaWidth, 26);
                 }
             }
+
             function drawPauseText() {
                 ctx.fillStyle = 'rgba(0,0,0,0.55)';
                 ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -671,16 +1197,20 @@
                 ctx.font = '15px Arial';
                 ctx.fillText('P vagy Space a folytatáshoz', WIDTH / 2, HEIGHT / 2 + 30);
             }
+
             function render() {
                 ctx.clearRect(0, 0, WIDTH, HEIGHT);
                 drawBackgroundImage();
                 drawBricks();
                 drawPatrols();
+                drawFx();
                 drawPowerUps();
                 drawBalls();
                 drawPaddle();
                 drawStatus();
             }
+
+            // ================= JÁTÉKMENET =================
             function handleLevelClear() {
                 if (currentLevel < levels.length - 1) {
                     pauseAndShowOverlay(
@@ -689,22 +1219,44 @@
                         'Pályaválasztó', () => showLevelSelect()
                     );
                 } else {
-                    pauseAndShowOverlay('You win! Minden pályát teljesítettél!', 'Restart', () => { showLevelSelect(); });
+                    pauseAndShowOverlay('You win! Minden pályát teljesítettél!', 'Főmenü', () => { showMainMenu(); });
                 }
             }
-            function showLevelSelect() {
+
+            function showMainMenu() {
                 gameRunning = false;
                 cancelAnimationFrame(animationId);
-                overlayText.textContent = 'Válassz pályát!';
-                levelButtons.style.display = 'grid';
+                overlayText.textContent = 'Házi Project Atari';
+                playButton.style.display = 'block';
+                selectButton.style.display = 'block';
+                backButton.style.display = 'none';
+                levelButtons.style.display = 'none';
                 overlayButton.style.display = 'none';
                 overlayButton2.style.display = 'none';
                 overlay.classList.remove('hidden');
             }
+
+            function showLevelSelect() {
+                gameRunning = false;
+                cancelAnimationFrame(animationId);
+                overlayText.textContent = 'Válassz pályát!';
+                playButton.style.display = 'none';
+                selectButton.style.display = 'none';
+                backButton.style.display = 'block';
+                levelButtons.style.display = 'grid';
+                levelButtons.scrollTop = 0;
+                overlayButton.style.display = 'none';
+                overlayButton2.style.display = 'none';
+                overlay.classList.remove('hidden');
+            }
+
             function pauseAndShowOverlay(text, buttonLabel, onContinue, label2, onSecond) {
                 gameRunning = false;
                 cancelAnimationFrame(animationId);
                 overlayText.textContent = text;
+                playButton.style.display = 'none';
+                selectButton.style.display = 'none';
+                backButton.style.display = 'none';
                 levelButtons.style.display = 'none';
                 overlayButton.style.display = 'block';
                 overlayButton.textContent = buttonLabel;
@@ -724,6 +1276,7 @@
                     onContinue();
                 };
             }
+
             function startGame(levelIndex, carry) {
                 overlay.classList.add('hidden');
                 startLevel(levelIndex, carry);
@@ -732,12 +1285,21 @@
                 lastTs = 0;
                 animationId = requestAnimationFrame(loop);
             }
+
+            playButton.addEventListener('click', () => startGame(0));
+            selectButton.addEventListener('click', () => showLevelSelect());
+            backButton.addEventListener('click', () => showMainMenu());
+
+            // Pályaválasztó gombok dinamikusan
             levels.forEach((level, i) => {
                 const btn = document.createElement('button');
                 btn.textContent = (i + 1) + '. ' + level.name;
+                btn.title = level.name;
+                btn.style.background = 'hsl(' + (130 + Math.floor(i / 10) * 45) + ',45%,36%)';
                 btn.addEventListener('click', () => startGame(i));
                 levelButtons.appendChild(btn);
             });
+
             function launchBall() {
                 if (launchTimer === Infinity) launchTimer = 0;
             }
@@ -776,7 +1338,9 @@
             document.addEventListener('keyup', keyUpHandler, false);
             canvas.addEventListener('mousemove', mouseMoveHandler, false);
             canvas.addEventListener('click', () => { if (gameRunning && !paused) launchBall(); }, false);
+
             function update(dt) {
+                // Időzített hatások
                 if (speedTimer > 0) {
                     speedTimer -= dt;
                     if (speedTimer <= 0) { speedTimer = 0; speedFactor = 1; }
@@ -786,14 +1350,33 @@
                     if (wideTimer <= 0) { wideTimer = 0; setPaddleWidth(basePaddleWidth); }
                 }
                 if (toast.timer > 0) toast.timer -= dt;
+
+                // Ütő billentyűzettel
                 if (rightPressed) paddle.x = Math.min(paddle.x + paddle.speed * dt, WIDTH - paddle.width);
                 else if (leftPressed) paddle.x = Math.max(paddle.x - paddle.speed * dt, 0);
+
+                // Mozgó sorok / oszlopok
                 for (let r = 0; r < brickRowCount; r++) rowOffsets[r] += rowSpeeds[r] * dt;
+                for (let c = 0; c < brickColumnCount; c++) colOffsets[c] += colSpeeds[c] * dt;
+                ghostClock += dt;
+                for (let i = fx.length - 1; i >= 0; i--) {
+                    fx[i].t += dt;
+                    if (fx[i].t >= 22) fx.splice(i, 1);
+                }
+
+                // Mozgó törhetetlen sávok
                 patrols.forEach(p => {
                     p.x += p.vx * dt;
                     if (p.x < 10) { p.x = 10; p.vx = Math.abs(p.vx); }
                     else if (p.x + p.w > WIDTH - 10) { p.x = WIDTH - 10 - p.w; p.vx = -Math.abs(p.vx); }
+                    if (p.vy) {
+                        p.y += p.vy * dt;
+                        if (p.y < p.minY) { p.y = p.minY; p.vy = Math.abs(p.vy); }
+                        else if (p.y > p.maxY) { p.y = p.maxY; p.vy = -Math.abs(p.vy); }
+                    }
                 });
+
+                // Leeső power-upok
                 for (let i = powerUps.length - 1; i >= 0; i--) {
                     const p = powerUps[i];
                     p.y += POWERUP_FALL_SPEED * dt;
@@ -806,6 +1389,8 @@
                         powerUps.splice(i, 1);
                     }
                 }
+
+                // Labdák
                 if (launchTimer === Infinity && !launchCheck.checked) launchTimer = LAUNCH_DELAY;
                 if (launchTimer > 0) {
                     launchTimer -= dt;
@@ -822,12 +1407,13 @@
                     lives--;
                     livesDisplay.textContent = lives;
                     if (lives <= 0) {
-                        pauseAndShowOverlay('Game Over! Final score: ' + score, 'Restart', () => { showLevelSelect(); });
+                        pauseAndShowOverlay('Game Over! Final score: ' + score, 'Újra', () => startGame(currentLevel), 'Főmenü', () => showMainMenu());
                     } else {
                         resetBallAndPaddle();
                     }
                 }
             }
+
             function loop(ts) {
                 if (!gameRunning) return;
                 if (!lastTs) lastTs = ts;
@@ -838,7 +1424,9 @@
                 if (paused) drawPauseText();
                 if (gameRunning) animationId = requestAnimationFrame(loop);
             }
-            showLevelSelect();
+
+            // Induláskor főmenü jelenik meg
+            showMainMenu();
         })();
     </script>
 </body>
